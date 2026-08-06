@@ -1,0 +1,26 @@
+mqtt:
+  broker:
+    host: localhost
+    port: 1883
+    keepalive: 60
+
+  subscribe:
+    - topic: smartcampus/telemetry/+
+      qos: 1
+
+    - topic: smartcampus/heartbeat/+
+      qos: 1
+
+    - topic: smartcampus/event/+
+      qos: 1
+
+  publish:
+    command:
+      topic: smartcampus/command
+      qos: 1
+      retain: false
+
+    room_state:
+      topic: smartcampus/room/state
+      qos: 1
+      retain: true
