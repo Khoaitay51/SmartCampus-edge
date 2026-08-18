@@ -4,23 +4,75 @@ mqtt:
     port: 1883
     keepalive: 60
 
+  namespace: smartcampus/v1
+
   subscribe:
-    - topic: smartcampus/telemetry/+
+    provisioning_request:
+      topic: smartcampus/v1/device/provision/request
       qos: 1
 
-    - topic: smartcampus/heartbeat/+
+    device_heartbeat:
+      topic: smartcampus/v1/device/+/heartbeat
       qos: 1
 
-    - topic: smartcampus/event/+
+    environment_telemetry:
+      topic: smartcampus/v1/telemetry/room/+/environment
+      qos: 1
+
+    occupancy_telemetry:
+      topic: smartcampus/v1/telemetry/room/+/occupancy
+      qos: 1
+
+    room_rfid_event:
+      topic: smartcampus/v1/event/room/+/rfid
+      qos: 1
+
+    command_ack:
+      topic: smartcampus/v1/ack/device/+/command/+
+      qos: 1
+
+    scenario:
+      topic: smartcampus/v1/scenario/#
       qos: 1
 
   publish:
-    command:
-      topic: smartcampus/command
+    provisioning_response:
+      topic: smartcampus/v1/device/provision/response/{mac}
+      qos: 1
+      retain: true
+
+    room_state:
+      topic: smartcampus/v1/room/{room_id}/state
+      qos: 1
+      retain: true
+
+    device_status:
+      topic: smartcampus/v1/device/{mac}/status
+      qos: 1
+      retain: true
+
+    room_command:
+      topic: smartcampus/v1/command/room/{room_id}
       qos: 1
       retain: false
 
-    room_state:
-      topic: smartcampus/room/state
+    device_command:
+      topic: smartcampus/v1/command/device/{mac}
       qos: 1
-      retain: true
+      retain: false
+
+    command_ack:
+      topic: smartcampus/v1/ack/device/{mac}/command/{command_id}
+      qos: 1
+      retain: false
+
+  command_types:
+    room:
+      - mode
+      - door
+      - fan
+      - light
+      - buzzer
+    device:
+      - ota
+      - restart
