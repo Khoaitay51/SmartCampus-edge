@@ -8,3 +8,4 @@ redis
 python-dotenv
 orjson
 aiomqtt
+asyncpg

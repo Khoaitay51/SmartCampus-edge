@@ -17,9 +17,9 @@ class AttendanceEvent(Base):
     user_id = Column(UUID, ForeignKey("users.user_id"), index=True)
     card_uid = Column(String, ForeignKey("users.card_uid"), index=True)
     event_type = Column(Enum(AttendanceEventType), index=True)
-    attendance_timestamp = Column(TIMESTAMP(timezone=True),server_default=func.now(), nullable = False, index=True)
+    attendance_timestamp = Column(TIMESTAMP(timezone=True), primary_key=True, server_default=func.now(), nullable=False, index=True)
     attendance_status_id = Column(String, ForeignKey("attendance_statuses.attendance_status_id"))
-    message_id = Column(String, unique=True, index=True)
+    message_id = Column(String, index=True)
     source_timestamp = Column(TIMESTAMP(timezone=True), index=True)
     gateway_received_timestamp = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False, index=True)
     

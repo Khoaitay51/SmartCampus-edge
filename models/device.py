@@ -25,7 +25,7 @@ class DeviceHeartbeat(Base):
 
     device_heartbeat_id = Column(BIGINT, primary_key=True, index=True, autoincrement=True)
     device_id = Column(UUID, ForeignKey("device.device_id"), nullable=False, index=True)
-    message_id = Column(String, unique=True, index=True)
+    message_id = Column(String, index=True)
     source_timestamp = Column(TIMESTAMP(timezone=True), index=True)
     gateway_received_timestamp = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False, index=True)
-    heartbeat_timestamp = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False, index=True)
+    heartbeat_timestamp = Column(TIMESTAMP(timezone=True), primary_key=True, server_default=func.now(), nullable=False, index=True)

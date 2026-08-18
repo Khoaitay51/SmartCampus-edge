@@ -9,8 +9,10 @@ class Occupancy(Base):
     room_id = Column(UUID, ForeignKey("room.room_id"), index=True)
     occupancy_type = Column(Enum(IRSignalType), index=True)
     occupancy_count = Column(Integer, index=True)
-    message_id = Column(String, unique=True, index=True)
+    message_id = Column(String, index=True)
     source_timestamp = Column(TIMESTAMP(timezone=True), index=True)
     gateway_received_timestamp = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False, index=True)
-    occupancy_timestamp = Column(TIMESTAMP(timezone=True), index=True)
+    occupancy_timestamp = Column(TIMESTAMP(timezone=True), primary_key=True, nullable=False, index=True)
+    
+    
     
