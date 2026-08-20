@@ -16,7 +16,7 @@ mqtt:
       qos: 1
 
     environment_telemetry:
-      topic: smartcampus/v1/telemetry/room/+/environment
+cctopic: smartcampus/v1/telemetry/room/+/environment
       qos: 1
 
     occupancy_telemetry:

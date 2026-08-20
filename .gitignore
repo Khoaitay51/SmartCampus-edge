@@ -9,4 +9,3 @@ __pycache__/
 .ruff_cache/
 mosquitto/data/
 mosquitto/log/
-mosquitto/data/mosquitto.db
