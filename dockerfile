@@ -1,13 +1,11 @@
-FROM python:3.12.11-slim-bookworm
-
 FROM python:3.13-slim
 
 WORKDIR /app
 
-COPY requirements.txt .
+COPY requirement.txt .
 
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirement.txt
 
 COPY . .
 
-CMD ["python", "main.py"]
+CMD ["uvicorn", "main:app", "--reload" , "--host", "0.0.0.0", "--port", "8000"]

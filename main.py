@@ -1,11 +1,33 @@
-from database import AsyncSession, Base, engine, get_db
+import asyncio
+from contextlib import asynccontextmanager
+
+from database import engine
 import models
 import models.telemetry
 from sqlalchemy import text
-import os
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, HTTPException
+from feature.mqtt import mqtt_worker
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Run the MQTT listener for the lifetime of the FastAPI application."""
+    task = asyncio.create_task(mqtt_worker.mqtt_listener())
+    try:
+        yield
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+app = FastAPI(lifespan=lifespan, title="SmartCampus Edge API", version="0.1.0")
+
+@app.get("/health", tags=["system"])
+async def health_check():
+    """Check that the API can reach PostgreSQL/TimescaleDB."""
+    async with engine.connect() as conn:
+        await conn.execute(text("SELECT 1"))
+
+    return {"status": "ok"}
 
 
 @app.get("/")
@@ -21,5 +43,13 @@ async def read_root():
         "message": "Welcome to the SmartCampus Edge API!",
         "hypertable": hypertables,
     }
-    
-    
+
+
+@app.get("/mqtt_check", tags=["system"])
+async def mqtt_check():
+    """Check that the API can connect to the MQTT broker."""
+    try:
+        async with mqtt_worker.create_mqtt_client():
+            return {"status": "ok"}
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="MQTT broker is unavailable") from exc

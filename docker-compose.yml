@@ -1,23 +1,78 @@
-version: "3.9"
-
 services:
   postgres:
     image: timescale/timescaledb:latest-pg17
     container_name: smartcampus-db
     restart: unless-stopped
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: 123456
-      POSTGRES_DB: smartcampus
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    build:
+      context: .
+      dockerfile: dockerfile
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: dockerfile
+    container_name: smartcampus-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      MQTT_HOST: mosquitto
+      MQTT_PORT: 1883
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      mosquitto:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   mosquitto:
     image: eclipse-mosquitto:2
     container_name: smartcampus-mqtt
     restart: unless-stopped
+    env_file:
+      - .env
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        password_file=/mosquitto/config/passwordfile
+        if [ -f "$$password_file" ]; then
+          mosquitto_passwd -b "$$password_file" "$$MQTT_USERNAME" "$$MQTT_PASSWORD"
+        else
+          mosquitto_passwd -b -c "$$password_file" "$$MQTT_USERNAME" "$$MQTT_PASSWORD"
+        fi
+        chown mosquitto:mosquitto "$$password_file"
+        chmod 600 "$$password_file"
+        exec mosquitto -c /mosquitto/config/mosquitto.conf
     ports:
       - "1883:1883"
       - "9001:9001"
@@ -25,6 +80,11 @@ services:
       - ./mosquitto/config:/mosquitto/config
       - ./mosquitto/data:/mosquitto/data
       - ./mosquitto/log:/mosquitto/log
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -h localhost -u \"$$MQTT_USERNAME\" -P \"$$MQTT_PASSWORD\" -t '$$SYS/broker/uptime' -C 1 -W 5"]
+      interval: 10s
+      timeout: 6s
+      retries: 5
 
 volumes:
   postgres_data:
