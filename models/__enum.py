@@ -40,3 +40,7 @@ class DeviceStatusEnum(Enum):
 class IRSignalType(Enum):
     IN = "in"
     OUT = "out"
+
+class DoorStateEnum(Enum):
+    LOCKED = "locked"
+    UNLOCKED = "unlocked"
