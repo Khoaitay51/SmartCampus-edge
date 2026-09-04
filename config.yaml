@@ -37,7 +37,7 @@ mqtt:
 
   publish:
     provisioning_response:
-      topic: smartcampus/v1/device/provision/response/{mac}
+      topic: smartcampus/v1/device/provision/response/{mac_address}
       qos: 1
       retain: true
 
@@ -47,7 +47,7 @@ mqtt:
       retain: true
 
     device_status:
-      topic: smartcampus/v1/device/{mac}/status
+      topic: smartcampus/v1/device/{mac_address}/status
       qos: 1
       retain: true
 
@@ -57,12 +57,12 @@ mqtt:
       retain: false
 
     device_command:
-      topic: smartcampus/v1/command/device/{mac}
+      topic: smartcampus/v1/command/device/{mac_address}
       qos: 1
       retain: false
 
     command_ack:
-      topic: smartcampus/v1/ack/device/{mac}/command/{command_id}
+      topic: smartcampus/v1/ack/device/{mac_address}/command/{command_id}
       qos: 1
       retain: false
 

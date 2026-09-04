@@ -47,7 +47,7 @@ async def read_root():
 
 @app.get("/mqtt_check", tags=["system"])
 async def mqtt_check():
-    """Check that the API can connect to the MQTT broker."""
+
     try:
         async with mqtt_worker.create_mqtt_client():
             return {"status": "ok"}
