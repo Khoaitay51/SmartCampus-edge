@@ -17,7 +17,7 @@ class AttendanceEvent(Base):
     attendance_event_id = Column(BIGINT, primary_key=True, autoincrement=True)
     room_id = Column(UUID, ForeignKey("room.room_id"), index=True)
     user_id = Column(UUID, ForeignKey("users.user_id"), nullable=True, index=True)
-    card_uid = Column(String, index=True)  # removed FK — unknown cards must be loggable
+    card_uid = Column(String, index=True)
     event_type = Column(Enum(AttendanceEventType), index=True)
     attendance_timestamp = Column(TIMESTAMP(timezone=True), primary_key=True, server_default=func.now(), nullable=False)
     attendance_status_id = Column(String, ForeignKey("attendance_statuses.attendance_status_id"))

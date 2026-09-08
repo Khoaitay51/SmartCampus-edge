@@ -66,6 +66,11 @@ mqtt:
       qos: 1
       retain: false
 
+    discrepancy:
+      topic: smartcampus/v1/room/{room_id}/discrepancy
+      qos: 1
+      retain: false
+
   command_types:
     room:
       - mode

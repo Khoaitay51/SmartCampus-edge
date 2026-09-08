@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 
 from database import engine
@@ -8,18 +9,28 @@ from sqlalchemy import text
 from fastapi import FastAPI, HTTPException
 from feature.mqtt import mqtt_worker
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger("main")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Run the MQTT listener for the lifetime of the FastAPI application."""
+    logger.info("Starting MQTT listener task...")
     task = asyncio.create_task(mqtt_worker.mqtt_listener())
     try:
         yield
     finally:
+        logger.info("Stopping MQTT listener task...")
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
 
 
 app = FastAPI(lifespan=lifespan, title="SmartCampus Edge API", version="0.1.0")
+
 
 @app.get("/health", tags=["system"])
 async def health_check():
@@ -47,7 +58,6 @@ async def read_root():
 
 @app.get("/mqtt_check", tags=["system"])
 async def mqtt_check():
-
     try:
         async with mqtt_worker.create_mqtt_client():
             return {"status": "ok"}

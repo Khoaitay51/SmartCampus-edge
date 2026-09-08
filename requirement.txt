@@ -1,8 +1,6 @@
 fastapi[standard]
 sqlalchemy
 alembic
-paho-mqtt
-statemachine
 psycopg[binary]
 redis
 python-dotenv
