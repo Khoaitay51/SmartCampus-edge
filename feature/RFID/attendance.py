@@ -59,7 +59,10 @@ async def check_and_publish_discrepancy(
         else:
             occupancy_count = current_occupancy
 
-        discrepancy = occupancy_count - attendance_count
+        if occupancy_count == 0 and attendance_count == 0:
+            discrepancy = 0
+        else:
+            discrepancy = occupancy_count - attendance_count -1 
 
         await publish_room_discrepancy(
             mqtt_client,

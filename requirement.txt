@@ -8,3 +8,4 @@ orjson
 aiomqtt
 asyncpg
 pyyaml
+scheduler

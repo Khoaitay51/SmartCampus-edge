@@ -6,6 +6,7 @@ from .attendance_record import AttendanceRecord
 from .peripheral import Peripheral, PeripheralAction
 from .session import RoomSession
 from .command import Command, CommandStatusEnum
+from .summarizer import RawSummarizer
 
 from .telemetry.environment import Environment
 from .telemetry.occupancy import Occupancy
