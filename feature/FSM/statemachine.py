@@ -376,7 +376,7 @@ async def state_recovery(
     Returns True if recovery was performed, False otherwise.
     """
     current = await get_current_state(room_id, RoomState, db)
-    if current != RoomState.EMERGENCY:
+    if current != RoomState.EMERGENCY or current != RoomState.SUSPECTED:
         logger.debug(
             "Room %s: not in EMERGENCY (%s), recovery skipped",
             room_id, current.name,

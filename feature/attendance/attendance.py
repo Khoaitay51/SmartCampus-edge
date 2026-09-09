@@ -136,6 +136,8 @@ async def session_initialization(
             await db.rollback()
             logger.error("Failed to initialize session %s: %s", session_id, e)
             raise
+        
+
 
 
 async def handle_signed_user(
@@ -162,9 +164,11 @@ async def handle_signed_user(
                         models.RoomSession.lecturer_id == user_id,
                         (models.RoomSession.session_end_timestamp.is_(None))
                         | (models.RoomSession.session_end_timestamp > now_ts),
+                        models.RoomSession.session_status == "active",
                     )
                     .order_by(models.RoomSession.session_start_timestamp.desc())
                     .limit(1)
+                    .with_for_update()
                 )
                 active_session = active_sess_res.scalar_one_or_none()
 
@@ -183,6 +187,7 @@ async def handle_signed_user(
                             session_start_timestamp=now_ts,
                             attendance_deadline_timestamp=session_deadline,
                             session_end_timestamp=session_end,
+                            session_status="active"
                         )
                     )
                     await db.execute(
@@ -204,7 +209,7 @@ async def handle_signed_user(
                     await db.execute(
                         update(models.RoomSession)
                         .where(models.RoomSession.session_id == active_session.session_id)
-                        .values(session_end_timestamp=now_ts)
+                        .values(session_status="ended")
                     )
                     await db.execute(
                         insert(models.AttendanceEvent).values(
@@ -214,13 +219,22 @@ async def handle_signed_user(
                             event_type=models.AttendanceEventType.CHECK_OUT,
                         )
                     )
-                    await transition_to(room_id, RoomState.SAVING, db, mqtt_client=mqtt_client)
-                    await db.commit()
-
-                    if mqtt_client:
-                        await publish_room_command(mqtt_client, str(room_id), RoomCommandType.BUZZER, CommandStatus.ON)
-                        await publish_room_command(mqtt_client, str(room_id), RoomCommandType.LIGHT, CommandStatus.OFF)
-                        await publish_room_command(mqtt_client, str(room_id), RoomCommandType.FAN, CommandStatus.OFF)
+                    count = await db.execute(select(models.Occupancy.occupancy_count).where(models.Occupancy.room_id==room_id).order_by(models.Occupancy.occupancy_timestamp.desc()).limit(1))
+                    current_occupancy = count.scalar() or 0
+                    
+                    if current_occupancy > 0:
+                        await transition_to(room_id, RoomState.SELF_STUDY, db, mqtt_client=mqtt_client)
+                        await db.commit()
+                        if mqtt_client:
+                            await publish_room_command(mqtt_client, str(room_id), RoomCommandType.BUZZER, CommandStatus.ON)
+                    else:
+                        await transition_to(room_id, RoomState.SAVING, db, mqtt_client=mqtt_client)
+                        await db.commit()
+                        if mqtt_client:
+                            await publish_room_command(mqtt_client, str(room_id), RoomCommandType.BUZZER, CommandStatus.ON)
+                            await publish_room_command(mqtt_client, str(room_id), RoomCommandType.LIGHT, CommandStatus.OFF)
+                            await publish_room_command(mqtt_client, str(room_id), RoomCommandType.FAN, CommandStatus.OFF)
+                    
                     logger.info("Lecturer %s ended session %s in room %s", user_id, active_session.session_id, room_id)
 
             elif role == models.UserRole.STUDENT:
@@ -335,4 +349,61 @@ async def handle_signed_user(
         except Exception as e:
             await db.rollback()
             logger.error("Failed to handle signed user attendance: %s", e)
+            raise
+
+
+async def handle_auto_end_session(
+    mqtt_client: mqtt.Client | None,
+    room_id: UUID,
+) -> None:
+    """Automatically end the active session if it has passed its end timestamp."""
+    now_ts = datetime.now(timezone.utc)
+
+    async with async_session() as db:
+        try:
+            result = await db.execute(
+                select(models.RoomSession)
+                .where(
+                    models.RoomSession.room_id == room_id,
+                    models.RoomSession.session_end_timestamp <= now_ts,
+                    models.RoomSession.session_end_timestamp.isnot(None),
+                    models.RoomSession.session_status == "active",
+                )
+                .order_by(models.RoomSession.session_start_timestamp.desc())
+                .limit(1)
+            )
+            session = result.scalar_one_or_none()
+
+            if session:
+                await db.execute(
+                    update(models.RoomSession)
+                    .where(models.RoomSession.session_id == session.session_id)
+                    .values(session_status="ended")
+                )
+                await db.execute(
+                    insert(models.AttendanceEvent).values(
+                        room_id=room_id,
+                        event_type=models.AttendanceEventType.CHECK_OUT,
+                    )
+                )
+                await db.commit()
+
+                count = await db.execute(select(models.Occupancy.occupancy_count).where(models.Occupancy.room_id == room_id).order_by(models.Occupancy.occupancy_timestamp.desc()).limit(1))
+                current_occupancy = count.scalar() or 0
+                
+                if current_occupancy > 0:
+                    await transition_to(room_id, RoomState.SELF_STUDY, db, mqtt_client=mqtt_client)
+                    await db.commit()
+                else:
+                    await transition_to(room_id, RoomState.SAVING, db, mqtt_client=mqtt_client)
+                    await db.commit()
+                    if mqtt_client:
+                        await publish_room_command(mqtt_client, str(room_id), RoomCommandType.LIGHT, CommandStatus.OFF)
+                        await publish_room_command(mqtt_client, str(room_id), RoomCommandType.FAN, CommandStatus.OFF)
+                
+                logger.info("Automatically ended session %s in room %s", session.session_id, room_id)
+
+        except Exception as e:
+            await db.rollback()
+            logger.error("Failed to auto-end session for room %s: %s", room_id, e)
             raise

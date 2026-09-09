@@ -22,7 +22,7 @@ from feature.config.config import (
 )
 from feature.enum import CommandStatus, RoomCommandType
 from feature.FSM import statemachine
-from feature.RFID import attendance
+from feature.attendance import attendance
 
 logger = logging.getLogger(__name__)
 

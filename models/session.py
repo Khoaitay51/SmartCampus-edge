@@ -15,3 +15,4 @@ class RoomSession(Base):
     attendance_deadline_timestamp = Column(TIMESTAMP(timezone=True), nullable=False, index=True)
     session_end_timestamp = Column(TIMESTAMP(timezone=True), index=True)
     is_exam = Column(Boolean, nullable=False, default=False, index=True)
+    session_status = Column(String, nullable=True, default="active", index=True)  # active, ended, canceled
