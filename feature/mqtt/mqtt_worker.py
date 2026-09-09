@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 import aiomqtt as mqtt
-from sqlalchemy import func, insert, select
+from sqlalchemy import func, insert, select, update
 
 import models
 from models import IRSignalType
@@ -22,7 +22,8 @@ from feature.config.config import (
 )
 from feature.enum import CommandStatus, RoomCommandType
 from feature.FSM import statemachine
-from feature.attendance import attendance
+from feature.mqtt import publisher
+from feature.RFID import attendance
 
 logger = logging.getLogger(__name__)
 
@@ -59,35 +60,68 @@ def _extract_payload(raw: dict) -> tuple[dict, str | None, str | None]:
 
 
 async def _handle_provision_request(client: mqtt.Client, payload: dict) -> None:
-    """Store auto-provisioning requests from new devices."""
+    """Store auto-provisioning requests and respond if device is already configured."""
     inner, msg_id, ts = _extract_payload(payload)
     mac = inner.get("mac_address")
     dev_type = inner.get("device_type", "GENERIC")
     fw = inner.get("firmware_version")
 
     logger.info("Provision request: mac=%s, type=%s, fw=%s", mac, dev_type, fw)
+    if not mac:
+        logger.warning("Missing mac_address in provision request: %s", inner)
+        return
 
     async with async_session() as db:
         try:
-            await db.execute(
-                insert(models.DeviceProvision).values(
-                    mac_address=mac,
-                    device_type=dev_type,
-                    firmware_version=fw,
-                    status="PENDING",
-                    message_id=msg_id,
-                    source_timestamp=_parse_timestamp(ts),
-                )
+            result = await db.execute(
+                select(models.Device).where(models.Device.mac_address == mac)
             )
-            await db.commit()
-            logger.info("Recorded provision request for MAC: %s", mac)
+            device = result.scalar_one_or_none()
+
+            if device is not None:
+                device.device_firmware_version = fw
+                device.last_seen_timestamp = _parse_timestamp(ts)
+                await db.commit()
+                logger.info("Updated existing device for MAC: %s", mac)
+
+                if device.room_id and client:
+                    room_res = await db.execute(
+                        select(models.Room).where(models.Room.room_id == device.room_id)
+                    )
+                    room = room_res.scalar_one_or_none()
+                    room_type = room.room_type.name.lower() if (room and hasattr(room.room_type, "name")) else "classroom"
+                    await publisher.publish_provisioning_response(
+                        client,
+                        mac,
+                        {
+                            "device_id": str(device.device_id),
+                            "device_name": device.device_name or f"{dev_type}_{mac.replace(':', '')[-4:]}",
+                            "room_id": str(device.room_id),
+                            "room_type": room_type,
+                            "firmware_version": fw or device.device_firmware_version or "1.0.0",
+                            "heartbeat_interval": 30,
+                        },
+                    )
+            else:
+                import uuid as _uuid
+                new_dev = models.Device(
+                    device_id=_uuid.uuid4(),
+                    mac_address=mac,
+                    device_name=f"{dev_type}_{mac.replace(':', '')[-4:]}",
+                    device_firmware_version=fw,
+                    device_status=models.DeviceStatusEnum.offline,
+                    last_seen_timestamp=_parse_timestamp(ts),
+                )
+                db.add(new_dev)
+                await db.commit()
+                logger.info("Registered new pending device with MAC: %s", mac)
         except Exception as e:
             await db.rollback()
-            logger.error("Failed to insert provision request for %s: %s", mac, e)
+            logger.error("Failed to process provision request for %s: %s", mac, e)
 
 
 async def _handle_heartbeat(client: mqtt.Client, payload: dict) -> None:
-    """Store device heartbeat telemetry."""
+    """Store device heartbeat telemetry and update device status."""
     inner, msg_id, ts = _extract_payload(payload)
     device_id = inner.get("device_id")
     alive = inner.get("alive", True)
@@ -96,16 +130,31 @@ async def _handle_heartbeat(client: mqtt.Client, payload: dict) -> None:
 
     logger.debug("Heartbeat: device=%s, alive=%s, uptime=%s", device_id, alive, uptime)
 
+    if not device_id:
+        logger.warning("Missing device_id in heartbeat: %s", inner)
+        return
+
+    dev_uuid = UUID(str(device_id))
+    ts_dt = _parse_timestamp(ts)
+
     async with async_session() as db:
         try:
             await db.execute(
-                insert(models.Heartbeat).values(
-                    device_id=UUID(str(device_id)) if device_id else None,
+                insert(models.DeviceHeartbeat).values(
+                    device_id=dev_uuid,
                     alive=alive,
                     firmware_version=firmware_version,
                     uptime=uptime,
                     message_id=msg_id,
-                    source_timestamp=_parse_timestamp(ts),
+                    source_timestamp=ts_dt,
+                )
+            )
+            await db.execute(
+                update(models.Device)
+                .where(models.Device.device_id == dev_uuid)
+                .values(
+                    device_status=models.DeviceStatusEnum.online if alive else models.DeviceStatusEnum.offline,
+                    last_seen_timestamp=ts_dt,
                 )
             )
             await db.commit()
@@ -123,7 +172,8 @@ async def _handle_environment_telemetry(client: mqtt.Client, payload: dict) -> N
     smoke_detected = inner.get("smoke_detected", False)
     smoke_value = inner.get("smoke_value")
     smoke_threshold = inner.get("smoke_threshold")
-    smoke_state = inner.get("smoke_state", "NORMAL")
+    smoke_state_raw = inner.get("smoke_state", "NORMAL")
+    smoke_state = str(smoke_state_raw).upper() if smoke_state_raw else "NORMAL"
     co2 = inner.get("co2")
     air_quality = inner.get("air_quality")
 
@@ -142,7 +192,7 @@ async def _handle_environment_telemetry(client: mqtt.Client, payload: dict) -> N
                     smoke_detected=smoke_detected,
                     smoke_value=smoke_value,
                     smoke_threshold=smoke_threshold,
-                    smoke_state=smoke_state,
+                    smoke_state=models.SmokeState[smoke_state] if smoke_state in models.SmokeState.__members__ else models.SmokeState.NORMAL,
                     co2=co2,
                     air_quality=air_quality,
                     message_id=msg_id,
@@ -154,7 +204,7 @@ async def _handle_environment_telemetry(client: mqtt.Client, payload: dict) -> N
             await db.rollback()
             logger.error("Failed to insert environment telemetry: %s", e)
 
-    if smoke_state in ("SUSPECTED", "EMERGENCY") and room_id:
+    if smoke_state in ("NORMAL", "SUSPECTED", "EMERGENCY") and room_id:
         async with async_session() as db:
             try:
                 new_smoke, new_room = await statemachine.handle_smoke_event(
@@ -172,10 +222,11 @@ async def _handle_environment_telemetry(client: mqtt.Client, payload: dict) -> N
 
 
 async def _handle_occupancy_telemetry(client: mqtt.Client, payload: dict) -> None:
-    """Store occupancy count changes from IR sensors."""
+    """Store occupancy count changes from IR sensors with clamp and mode protection."""
     inner, msg_id, ts = _extract_payload(payload)
     room_id = inner.get("room_id")
-    occupancy_type = inner.get("occupancy_type")
+    occupancy_type_raw = inner.get("occupancy_type")
+    occupancy_type = str(occupancy_type_raw).upper() if occupancy_type_raw else ""
 
     logger.info("Occupancy: room=%s, type=%s", room_id, occupancy_type)
 
@@ -184,7 +235,7 @@ async def _handle_occupancy_telemetry(client: mqtt.Client, payload: dict) -> Non
     elif occupancy_type == IRSignalType.OUT.name:
         delta = -1
     else:
-        logger.warning("Invalid occupancy_type: %s", occupancy_type)
+        logger.warning("Invalid occupancy_type: %s", occupancy_type_raw)
         return
 
     if not room_id:
@@ -204,19 +255,32 @@ async def _handle_occupancy_telemetry(client: mqtt.Client, payload: dict) -> Non
                     .with_for_update()
                 )
                 last_count = result.scalar()
-                new_count = (last_count + delta) if last_count is not None else max(delta, 0)
+                new_count = max(0, (last_count + delta)) if last_count is not None else max(delta, 0)
+
+                current_room_state = await statemachine.get_current_state(room_uuid, statemachine.RoomState, db)
+
                 if new_count == 0:
-                    try:
-                        await statemachine.transition_to(
-                            room_uuid, statemachine.RoomState.SAVING, db, mqtt_client=client
-                        )
-                    except Exception as e:
-                        logger.warning("Transition to SAVING state skipped for room %s: %s", room_id, e)
+                    if current_room_state == statemachine.RoomState.SELF_STUDY:
+                        try:
+                            await statemachine.transition_to(
+                                room_uuid, statemachine.RoomState.SAVING, db, mqtt_client=client
+                            )
+                        except Exception as e:
+                            logger.warning("Transition to SAVING state skipped for room %s: %s", room_id, e)
+                elif new_count > 0:
+                    # Auto-transition to SELF_STUDY only if room was in SAVING
+                    if current_room_state == statemachine.RoomState.SAVING:
+                        try:
+                            await statemachine.transition_to(
+                                room_uuid, statemachine.RoomState.SELF_STUDY, db, mqtt_client=client
+                            )
+                        except Exception as e:
+                            logger.warning("Transition to SELF_STUDY state skipped for room %s: %s", room_id, e)
 
                 await db.execute(
                     insert(models.Occupancy).values(
                         room_id=room_uuid,
-                        occupancy_type=occupancy_type,
+                        occupancy_type=IRSignalType[occupancy_type],
                         occupancy_count=new_count,
                         message_id=msg_id,
                         source_timestamp=_parse_timestamp(ts),

@@ -32,6 +32,7 @@ async def check_and_publish_discrepancy(
             select(models.RoomSession)
             .where(
                 models.RoomSession.room_id == room_id,
+                models.RoomSession.session_status == "active",
                 (models.RoomSession.session_end_timestamp.is_(None))
                 | (models.RoomSession.session_end_timestamp > now_ts),
             )
@@ -62,7 +63,9 @@ async def check_and_publish_discrepancy(
         if occupancy_count == 0 and attendance_count == 0:
             discrepancy = 0
         else:
-            discrepancy = occupancy_count - attendance_count -1 
+            has_lecturer_checked_in = session.lecturer_id is not None
+            expected_lecturer_count = 1 if has_lecturer_checked_in else 0
+            discrepancy = occupancy_count - attendance_count - expected_lecturer_count
 
         await publish_room_discrepancy(
             mqtt_client,
@@ -161,9 +164,9 @@ async def handle_signed_user(
                     select(models.RoomSession)
                     .where(
                         models.RoomSession.room_id == room_id,
-                        models.RoomSession.lecturer_id == user_id,
                         (models.RoomSession.session_end_timestamp.is_(None))
                         | (models.RoomSession.session_end_timestamp > now_ts),
+                        models.RoomSession.lecturer_id == user_id,
                         models.RoomSession.session_status == "active",
                     )
                     .order_by(models.RoomSession.session_start_timestamp.desc())
@@ -209,7 +212,10 @@ async def handle_signed_user(
                     await db.execute(
                         update(models.RoomSession)
                         .where(models.RoomSession.session_id == active_session.session_id)
-                        .values(session_status="ended")
+                        .values(
+                            session_status="ended",
+                            session_end_timestamp=now_ts,
+                        )
                     )
                     await db.execute(
                         insert(models.AttendanceEvent).values(
@@ -242,6 +248,7 @@ async def handle_signed_user(
                     select(models.RoomSession)
                     .where(
                         models.RoomSession.room_id == room_id,
+                        models.RoomSession.session_status == "active",
                         (models.RoomSession.session_end_timestamp.is_(None))
                         | (models.RoomSession.session_end_timestamp > now_ts),
                     )

@@ -205,10 +205,6 @@ async def set_current_state(
     emergency_source_id: int | None = None,
     mqtt_client: mqtt.Client | None = None,
 ) -> BaseState:
-    """Persist a new state record to the database.
-
-    Uses ``db.flush()`` so the caller controls the transaction boundary.
-    """
     state_cls = type(state)
 
     if state_cls == RoomState:
@@ -271,7 +267,7 @@ async def transition_to(
     allowed = _ROOM_TRANSITIONS.get(current, frozenset())
     if target not in allowed:
         msg = (
-            f"Room {room_id}: transition {current.name} ? {target.name} "
+            f"Room {room_id}: transition {current.name} -> {target.name} "
             f"is not allowed"
         )
         logger.warning(msg)
@@ -285,12 +281,13 @@ async def transition_to(
     )
 
     logger.info(
-        "Room %s: transition %s ? %s",
+        "Room %s: transition %s -> %s",
         room_id, current.name, target.name,
     )
 
-    if mqtt_client:
-        if target == RoomState.EMERGENCY:
+    if target == RoomState.EMERGENCY:
+        await set_current_state(room_id, DoorState.UNLOCKED, db, mqtt_client=mqtt_client)
+        if mqtt_client:
             await publish_room_command(
                 mqtt_client, str(room_id),
                 RoomCommandType.DOOR, CommandStatus.UNLOCKED
@@ -299,7 +296,9 @@ async def transition_to(
                 mqtt_client, str(room_id),
                 RoomCommandType.BUZZER, CommandStatus.ON
             )
-        elif target == RoomState.EXAM:
+    elif target == RoomState.EXAM:
+        await set_current_state(room_id, DoorState.LOCKED, db, mqtt_client=mqtt_client)
+        if mqtt_client:
             await publish_room_command(
                 mqtt_client, str(room_id),
                 RoomCommandType.DOOR, CommandStatus.LOCKED
@@ -334,6 +333,10 @@ async def handle_smoke_event(
         )
         return SmokeState.NORMAL, None
 
+    current_smoke = await get_current_state(room_id, SmokeState, db)
+    if current_smoke == new_smoke:
+        return new_smoke, None
+
     await set_current_state(room_id, new_smoke, db, mqtt_client=mqtt_client)
 
     room_target: RoomState | None = None
@@ -344,7 +347,9 @@ async def handle_smoke_event(
         room_target = RoomState.EMERGENCY
     elif new_smoke == SmokeState.NORMAL:
         logger.info("Room %s: smoke returned to NORMAL", room_id)
-        return new_smoke, None
+        await state_recovery(room_id, db, mqtt_client=mqtt_client)
+        recovered_state = await get_current_state(room_id, RoomState, db)
+        return new_smoke, recovered_state
 
     try:
         _, actual_room_state = await transition_to(
@@ -355,7 +360,7 @@ async def handle_smoke_event(
         return new_smoke, actual_room_state
     except TransitionError:
         logger.info(
-            "Room %s: smoke ? %s but room transition to %s blocked",
+            "Room %s: smoke -> %s but room transition to %s blocked",
             room_id, new_smoke.name, room_target.name,
         )
         return new_smoke, None
@@ -376,7 +381,7 @@ async def state_recovery(
     Returns True if recovery was performed, False otherwise.
     """
     current = await get_current_state(room_id, RoomState, db)
-    if current != RoomState.EMERGENCY or current != RoomState.SUSPECTED:
+    if current not in (RoomState.EMERGENCY, RoomState.SUSPECTED):
         logger.debug(
             "Room %s: not in EMERGENCY (%s), recovery skipped",
             room_id, current.name,
@@ -387,7 +392,8 @@ async def state_recovery(
         select(RoomStateModel)
         .where(
             RoomStateModel.room_id == room_id,
-            RoomStateModel.room_mode != RoomModeEnum.EMERGENCY,
+            ~RoomStateModel.room_mode.in_([RoomModeEnum.EMERGENCY, RoomModeEnum.SUSPECTED]),
+            
         )
         .order_by(RoomStateModel.room_state_timestamp.desc())
         .limit(1)
@@ -411,9 +417,11 @@ async def state_recovery(
         mqtt_client=mqtt_client,
     )
     await set_current_state(room_id, SmokeState.NORMAL, db, mqtt_client=mqtt_client)
+    if mqtt_client:
+        await publish_room_command(mqtt_client, room_id= room_id, command_type=RoomCommandType.BUZZER, command_value= CommandStatus.OFF)
 
     logger.info(
-        "Room %s: recovered from EMERGENCY ? %s",
+        "Room %s: recovered from EMERGENCY -> %s",
         room_id, fsm_state.name,
     )
     return True

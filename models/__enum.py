@@ -2,21 +2,21 @@ from enum import Enum
 
 
 class AttendanceEventType(Enum):
-    CHECK_IN = "check_in"
-    CHECK_OUT = "check_out"
-    REJECT = "reject"
+    CHECK_IN = "CHECK_IN"
+    CHECK_OUT = "CHECK_OUT"
+    REJECT = "REJECT"
 
 
 class UserRole(Enum):
-    ADMIN = "admin"
-    LECTURER = "lecturer"
-    STUDENT = "student"
-    UNKNOWN = "unknown"
+    ADMIN = "ADMIN"
+    LECTURER = "LECTURER"
+    STUDENT = "STUDENT"
+    UNKNOWN = "UNKNOWN"
 
 
 class RoomType(Enum):
-    CLASSROOM = "classroom"
-    CORRIDOR = "corridor"
+    CLASSROOM = "CLASSROOM"
+    CORRIDOR = "CORRIDOR"
 
 
 class RoomStatus(Enum):
@@ -25,19 +25,19 @@ class RoomStatus(Enum):
 
 
 class RoomModeEnum(Enum):
-    SAVING = "saving"
-    SELF_STUDY = "self_study"
-    LECTURE = "lecture"
-    EXAM = "exam"
-    LOCK = "lock"
-    SUSPECTED = "suspected"
-    EMERGENCY = "emergency"
+    SAVING = "SAVING"
+    SELF_STUDY = "SELF_STUDY"
+    LECTURE = "LECTURE"
+    EXAM = "EXAM"
+    LOCK = "LOCK"
+    SUSPECTED = "SUSPECTED"
+    EMERGENCY = "EMERGENCY"
 
 
 class SmokeState(Enum):
-    NORMAL = "normal"
-    SUSPECTED = "suspected"
-    EMERGENCY = "emergency"
+    NORMAL = "NORMAL"
+    SUSPECTED = "SUSPECTED"
+    EMERGENCY = "EMERGENCY"
 
 
 class DeviceStatusEnum(Enum):
@@ -46,10 +46,10 @@ class DeviceStatusEnum(Enum):
 
 
 class IRSignalType(Enum):
-    IN = "in"
-    OUT = "out"
+    IN = "IN"
+    OUT = "OUT"
 
 
 class DoorStateEnum(Enum):
-    LOCKED = "locked"
-    UNLOCKED = "unlocked"
+    LOCKED = "LOCKED"
+    UNLOCKED = "UNLOCKED"
