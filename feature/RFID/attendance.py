@@ -7,7 +7,7 @@ from sqlalchemy import func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from database import async_session
 import models
-from feature.enum import CommandStatus, RoomCommandType
+from feature.enum import CommandStatus, RoomCommandType , RoomStatusEnum
 from feature.FSM.statemachine import RoomState, transition_to
 from feature.mqtt.publisher import publish_room_command, publish_room_discrepancy
 
@@ -32,7 +32,7 @@ async def check_and_publish_discrepancy(
             select(models.RoomSession)
             .where(
                 models.RoomSession.room_id == room_id,
-                models.RoomSession.session_status == "active",
+                models.RoomSession.session_status == RoomStatusEnum.ACTIVE.value,
                 (models.RoomSession.session_end_timestamp.is_(None))
                 | (models.RoomSession.session_end_timestamp > now_ts),
             )
@@ -120,7 +120,7 @@ async def session_initialization(
 ) -> None:
     """Initialize session deadlines and end time."""
     session_deadline = session_start + timedelta(minutes=15)
-    session_end = session_start + timedelta(hours=1)
+    session_end = session_start + timedelta(minutes=45)
 
     async with async_session() as db:
         try:
@@ -167,7 +167,7 @@ async def handle_signed_user(
                         (models.RoomSession.session_end_timestamp.is_(None))
                         | (models.RoomSession.session_end_timestamp > now_ts),
                         models.RoomSession.lecturer_id == user_id,
-                        models.RoomSession.session_status == "active",
+                        models.RoomSession.session_status == RoomStatusEnum.ACTIVE.value,
                     )
                     .order_by(models.RoomSession.session_start_timestamp.desc())
                     .limit(1)
@@ -180,7 +180,7 @@ async def handle_signed_user(
 
                     new_session_id = uuid.uuid4()
                     session_deadline = now_ts + timedelta(minutes=15)
-                    session_end = now_ts + timedelta(hours=2)
+                    session_end = now_ts + timedelta(minutes=45)
 
                     await db.execute(
                         insert(models.RoomSession).values(
@@ -190,7 +190,7 @@ async def handle_signed_user(
                             session_start_timestamp=now_ts,
                             attendance_deadline_timestamp=session_deadline,
                             session_end_timestamp=session_end,
-                            session_status="active"
+                            session_status=RoomStatusEnum.ACTIVE.value
                         )
                     )
                     await db.execute(
@@ -213,7 +213,7 @@ async def handle_signed_user(
                         update(models.RoomSession)
                         .where(models.RoomSession.session_id == active_session.session_id)
                         .values(
-                            session_status="ended",
+                            session_status=RoomStatusEnum.ENDED.value,
                             session_end_timestamp=now_ts,
                         )
                     )
@@ -248,7 +248,7 @@ async def handle_signed_user(
                     select(models.RoomSession)
                     .where(
                         models.RoomSession.room_id == room_id,
-                        models.RoomSession.session_status == "active",
+                        models.RoomSession.session_status == RoomStatusEnum.ACTIVE.value,
                         (models.RoomSession.session_end_timestamp.is_(None))
                         | (models.RoomSession.session_end_timestamp > now_ts),
                     )
@@ -374,7 +374,7 @@ async def handle_auto_end_session(
                     models.RoomSession.room_id == room_id,
                     models.RoomSession.session_end_timestamp <= now_ts,
                     models.RoomSession.session_end_timestamp.isnot(None),
-                    models.RoomSession.session_status == "active",
+                    models.RoomSession.session_status == RoomStatusEnum.ACTIVE.value,
                 )
                 .order_by(models.RoomSession.session_start_timestamp.desc())
                 .limit(1)
@@ -385,7 +385,7 @@ async def handle_auto_end_session(
                 await db.execute(
                     update(models.RoomSession)
                     .where(models.RoomSession.session_id == session.session_id)
-                    .values(session_status="ended")
+                    .values(session_status=RoomStatusEnum.ENDED.value)
                 )
                 await db.execute(
                     insert(models.AttendanceEvent).values(
@@ -414,3 +414,50 @@ async def handle_auto_end_session(
             await db.rollback()
             logger.error("Failed to auto-end session for room %s: %s", room_id, e)
             raise
+        
+async def auto_end_loop(create_client=None, poll_interval: int | None = None) -> None:
+    """Polling task: check and close expired sessions every 5 minutes (or via SESSION_AUTO_END_POLL_INTERVAL)."""
+    import asyncio
+    import os
+    POLL_INTERVAL = poll_interval if poll_interval is not None else int(os.getenv("SESSION_AUTO_END_POLL_INTERVAL", "300"))
+
+    if create_client is None:
+        from feature.mqtt.mqtt_worker import create_mqtt_client
+        create_client = lambda: create_mqtt_client(identifier="smartcampus-edge-autoend")
+
+    logger.info("Started session auto-end polling loop (interval=%ds)", POLL_INTERVAL)
+
+    while True:
+        try:
+            async with async_session() as db:
+                result = await db.execute(
+                    select(models.RoomSession.room_id)
+                    .where(
+                        models.RoomSession.session_end_timestamp <= func.now(),
+                        models.RoomSession.session_end_timestamp.isnot(None),
+                        models.RoomSession.session_status == RoomStatusEnum.ACTIVE.value,
+                    )
+                    .distinct()
+                )
+                expired_room_ids = result.scalars().all()
+
+            if expired_room_ids:
+                logger.info("Found %d room(s) with expired sessions: %s", len(expired_room_ids), expired_room_ids)
+                async with create_client() as client:
+                    for room_id in expired_room_ids:
+                        try:
+                            await handle_auto_end_session(mqtt_client=client, room_id=room_id)
+                        except Exception as e:
+                            logger.error("Failed to auto-end session for room %s: %s", room_id, e)
+
+        except asyncio.CancelledError:
+            logger.info("Session auto-end polling loop cancelled.")
+            break
+        except Exception as e:
+            logger.error("Error in auto_end_loop: %s", e)
+
+        try:
+            await asyncio.sleep(POLL_INTERVAL)
+        except asyncio.CancelledError:
+            logger.info("Session auto-end polling loop cancelled during sleep.")
+            break

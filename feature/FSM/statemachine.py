@@ -418,7 +418,7 @@ async def state_recovery(
     )
     await set_current_state(room_id, SmokeState.NORMAL, db, mqtt_client=mqtt_client)
     if mqtt_client:
-        await publish_room_command(mqtt_client, room_id= room_id, command_type=RoomCommandType.BUZZER, command_value= CommandStatus.OFF)
+        await publish_room_command(mqtt_client, room_id= str(room_id), command_type=RoomCommandType.BUZZER, command_value= CommandStatus.OFF)
 
     logger.info(
         "Room %s: recovered from EMERGENCY -> %s",

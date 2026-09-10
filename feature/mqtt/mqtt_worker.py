@@ -28,12 +28,12 @@ from feature.RFID import attendance
 logger = logging.getLogger(__name__)
 
 
-def create_mqtt_client() -> mqtt.Client:
+def create_mqtt_client(identifier: str | None = None) -> mqtt.Client:
     """Instantiate an aiomqtt Client with configured host/port/auth."""
     kwargs = {
         "hostname": BROKER_HOST,
         "port": BROKER_PORT,
-        "identifier": "smartcampus-edge-worker",
+        "identifier": identifier or "smartcampus-edge-worker",
     }
     if BROKER_USERNAME and BROKER_PASSWORD:
         kwargs["username"] = BROKER_USERNAME

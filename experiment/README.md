@@ -72,3 +72,31 @@ Bat cu luc nao ban muon xem bang diem danh, trang thai phong FSM, telemetry moi 
 ```bash
 .venv/bin/python experiment/check_database.py
 ```
+
+---
+
+### Buoc 5: Kiem tra co che tu dong dong Session (Auto-end Session khi het gio)
+
+File `experiment/test_auto_end_session.py` cung cap cac che do test:
+
+#### A. Chay test tu dong tu A -> Z (Tao session het han 3s -> Doi -> Auto-end -> Assert ket qua):
+```bash
+.venv/bin/python experiment/test_auto_end_session.py demo
+```
+
+#### B. Test voi `main.py` dang chay thuc te:
+1. Tao 1 session o trang thai ACTIVE nhung da qua gio ket thuc:
+   ```bash
+   .venv/bin/python experiment/test_auto_end_session.py setup
+   ```
+2. Quan sat terminal cua `main.py` (Polling task `auto_end_loop` se quet va log:
+   `Found 1 room(s) with expired sessions` va `Automatically ended session ...`).
+   *(Tip: Khi test co the set bien moi truong `SESSION_AUTO_END_POLL_INTERVAL=5` khi chay `main.py` de poll moi 5 giay thay vi 5 phut)*.
+3. Kiem tra lai trang thai trong database:
+   ```bash
+   .venv/bin/python experiment/test_auto_end_session.py status
+   ```
+4. Kich hoat dong session ngay lap tuc bang tay (neu muon):
+   ```bash
+   .venv/bin/python experiment/test_auto_end_session.py trigger
+   ```

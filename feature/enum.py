@@ -24,3 +24,8 @@ class DeviceCommandEnum(Enum):
 class DeviceStatusEnum(Enum):
     ONLINE = "online"
     OFFLINE = "offline"
+
+class RoomStatusEnum(Enum):
+    ACTIVE = "active"
+    ENDED = "ended"
+    CANCELED = "canceled"
