@@ -35,6 +35,8 @@ services:
       dockerfile: dockerfile
     container_name: smartcampus-api
     restart: unless-stopped
+    volumes:
+      - .:/app
     env_file:
       - .env
     environment:

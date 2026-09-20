@@ -7,7 +7,7 @@ from sqlalchemy import func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from database import async_session
 import models
-from feature.enum import CommandStatus, RoomCommandType , RoomStatusEnum
+from feature.enum import CommandStatus, RoomCommandType, SessionStatusEnum
 from feature.FSM.statemachine import RoomState, transition_to
 from feature.mqtt.publisher import publish_room_command, publish_room_discrepancy
 
@@ -32,7 +32,7 @@ async def check_and_publish_discrepancy(
             select(models.RoomSession)
             .where(
                 models.RoomSession.room_id == room_id,
-                models.RoomSession.session_status == RoomStatusEnum.ACTIVE.value,
+                models.RoomSession.session_status == SessionStatusEnum.ACTIVE.value,
                 (models.RoomSession.session_end_timestamp.is_(None))
                 | (models.RoomSession.session_end_timestamp > now_ts),
             )
@@ -167,7 +167,7 @@ async def handle_signed_user(
                         (models.RoomSession.session_end_timestamp.is_(None))
                         | (models.RoomSession.session_end_timestamp > now_ts),
                         models.RoomSession.lecturer_id == user_id,
-                        models.RoomSession.session_status == RoomStatusEnum.ACTIVE.value,
+                        models.RoomSession.session_status == SessionStatusEnum.ACTIVE.value,
                     )
                     .order_by(models.RoomSession.session_start_timestamp.desc())
                     .limit(1)
@@ -190,7 +190,7 @@ async def handle_signed_user(
                             session_start_timestamp=now_ts,
                             attendance_deadline_timestamp=session_deadline,
                             session_end_timestamp=session_end,
-                            session_status=RoomStatusEnum.ACTIVE.value
+                            session_status=SessionStatusEnum.ACTIVE.value
                         )
                     )
                     await db.execute(
@@ -206,14 +206,14 @@ async def handle_signed_user(
                     if mqtt_client:
                         await publish_room_command(mqtt_client, str(room_id), RoomCommandType.BUZZER, CommandStatus.ON)
                         await publish_room_command(mqtt_client, str(room_id), RoomCommandType.LIGHT, CommandStatus.ON)
-                        await publish_room_command(mqtt_client, str(room_id), RoomCommandType.FAN, CommandStatus.ON)
+                        # Fan is NOT auto-enabled here (FR-AC-03: fan requires human confirm or AI recommendation)
                     logger.info("Lecturer %s started session %s in room %s", user_id, new_session_id, room_id)
                 else:
                     await db.execute(
                         update(models.RoomSession)
                         .where(models.RoomSession.session_id == active_session.session_id)
                         .values(
-                            session_status=RoomStatusEnum.ENDED.value,
+                            session_status=SessionStatusEnum.ENDED.value,
                             session_end_timestamp=now_ts,
                         )
                     )
@@ -248,7 +248,7 @@ async def handle_signed_user(
                     select(models.RoomSession)
                     .where(
                         models.RoomSession.room_id == room_id,
-                        models.RoomSession.session_status == RoomStatusEnum.ACTIVE.value,
+                        models.RoomSession.session_status == SessionStatusEnum.ACTIVE.value,
                         (models.RoomSession.session_end_timestamp.is_(None))
                         | (models.RoomSession.session_end_timestamp > now_ts),
                     )
@@ -374,7 +374,7 @@ async def handle_auto_end_session(
                     models.RoomSession.room_id == room_id,
                     models.RoomSession.session_end_timestamp <= now_ts,
                     models.RoomSession.session_end_timestamp.isnot(None),
-                    models.RoomSession.session_status == RoomStatusEnum.ACTIVE.value,
+                    models.RoomSession.session_status == SessionStatusEnum.ACTIVE.value,
                 )
                 .order_by(models.RoomSession.session_start_timestamp.desc())
                 .limit(1)
@@ -385,7 +385,7 @@ async def handle_auto_end_session(
                 await db.execute(
                     update(models.RoomSession)
                     .where(models.RoomSession.session_id == session.session_id)
-                    .values(session_status=RoomStatusEnum.ENDED.value)
+                    .values(session_status=SessionStatusEnum.ENDED.value)
                 )
                 await db.execute(
                     insert(models.AttendanceEvent).values(
@@ -435,7 +435,7 @@ async def auto_end_loop(create_client=None, poll_interval: int | None = None) ->
                     .where(
                         models.RoomSession.session_end_timestamp <= func.now(),
                         models.RoomSession.session_end_timestamp.isnot(None),
-                        models.RoomSession.session_status == RoomStatusEnum.ACTIVE.value,
+                        models.RoomSession.session_status == SessionStatusEnum.ACTIVE.value,
                     )
                     .distinct()
                 )

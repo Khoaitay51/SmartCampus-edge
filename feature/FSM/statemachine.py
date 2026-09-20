@@ -7,7 +7,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import aiomqtt as mqtt
-from feature.mqtt.publisher import publish_room_state, publish_room_command
+from feature.mqtt.publisher import publish_room_state, publish_room_command, publish_led_strip
+from feature.enum import LedStripStatus
 from feature.enum import RoomCommandType, CommandStatus
 
 from models.room import (
@@ -122,6 +123,21 @@ _ROOM_TRANSITIONS: dict[RoomState, frozenset[RoomState]] = {
     }),
     RoomState.EMERGENCY: frozenset(),
 }
+
+# ---------------------------------------------------------------------------
+# LED strip color/effect mapping per room state (FR-AC-01)
+# ---------------------------------------------------------------------------
+
+_LED_CONFIG: dict["RoomState", tuple[str, str]] = {
+    RoomState.SAVING:     ("#000000", LedStripStatus.STATIC.value),     # Off
+    RoomState.SELF_STUDY: ("#66CCFF", LedStripStatus.STATIC.value),     # Light blue
+    RoomState.LECTURE:    ("#FFFFFF", LedStripStatus.STATIC.value),     # White
+    RoomState.EXAM:       ("#FFBF00", LedStripStatus.STATIC.value),     # Amber
+    RoomState.LOCK:       ("#808080", LedStripStatus.STATIC.value),     # Gray
+    RoomState.SUSPECTED:  ("#FF8C00", LedStripStatus.BREATHE.value),   # Orange breathe
+    RoomState.EMERGENCY:  ("#FF0000", LedStripStatus.STROBE.value),    # Red strobe
+}
+
 
 
 class TransitionError(Exception):
@@ -280,6 +296,11 @@ async def transition_to(
         mqtt_client=mqtt_client,
     )
 
+    # Publish LED strip color/effect for the new state (FR-AC-01)
+    if mqtt_client:
+        led_color, led_effect = _LED_CONFIG.get(target, ("#000000", "static"))
+        await publish_led_strip(mqtt_client, str(room_id), led_color, led_effect)
+
     logger.info(
         "Room %s: transition %s -> %s",
         room_id, current.name, target.name,
@@ -337,8 +358,6 @@ async def handle_smoke_event(
     if current_smoke == new_smoke:
         return new_smoke, None
 
-    await set_current_state(room_id, new_smoke, db, mqtt_client=mqtt_client)
-
     room_target: RoomState | None = None
 
     if new_smoke == SmokeState.SUSPECTED:
@@ -346,10 +365,14 @@ async def handle_smoke_event(
     elif new_smoke == SmokeState.EMERGENCY:
         room_target = RoomState.EMERGENCY
     elif new_smoke == SmokeState.NORMAL:
+        # state_recovery sets SmokeState.NORMAL internally; no need to write it here again.
         logger.info("Room %s: smoke returned to NORMAL", room_id)
         await state_recovery(room_id, db, mqtt_client=mqtt_client)
         recovered_state = await get_current_state(room_id, RoomState, db)
         return new_smoke, recovered_state
+
+    # Only reached for SUSPECTED / EMERGENCY: persist the new smoke state.
+    await set_current_state(room_id, new_smoke, db, mqtt_client=mqtt_client)
 
     try:
         _, actual_room_state = await transition_to(
@@ -417,8 +440,26 @@ async def state_recovery(
         mqtt_client=mqtt_client,
     )
     await set_current_state(room_id, SmokeState.NORMAL, db, mqtt_client=mqtt_client)
+
+    # Restore door state to match the recovered room mode.
+    recovered_door = DoorState.LOCKED if fsm_state == RoomState.EXAM else DoorState.UNLOCKED
+    await set_current_state(room_id, recovered_door, db, mqtt_client=mqtt_client)
+
     if mqtt_client:
-        await publish_room_command(mqtt_client, room_id= str(room_id), command_type=RoomCommandType.BUZZER, command_value= CommandStatus.OFF)
+        await publish_room_command(
+            mqtt_client, room_id=str(room_id),
+            command_type=RoomCommandType.BUZZER, command_value=CommandStatus.OFF,
+        )
+        await publish_room_command(
+            mqtt_client, room_id=str(room_id),
+            command_type=RoomCommandType.DOOR,
+            command_value=CommandStatus.LOCKED if fsm_state == RoomState.EXAM else CommandStatus.UNLOCKED,
+        )
+
+    # Publish LED strip for recovered state (FR-AC-01)
+    if mqtt_client:
+        led_color, led_effect = _LED_CONFIG.get(fsm_state, ("#000000", "static"))
+        await publish_led_strip(mqtt_client, str(room_id), led_color, led_effect)
 
     logger.info(
         "Room %s: recovered from EMERGENCY -> %s",

@@ -8,3 +8,5 @@ class RawSummarizer(Base):
     raw_summarizer_id = Column(UUID(as_uuid=True), primary_key=True, nullable=False)
     raw_summarizer_timestamp = Column(TIMESTAMP(timezone=True), primary_key=True, nullable=False, server_default=func.now())
     raw_summarizer_name = Column(String, nullable=False)
+    raw_data = Column(String,nullable=False)
+    summary = Column(String,nullable=False)

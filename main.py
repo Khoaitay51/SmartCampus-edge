@@ -2,13 +2,23 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
-from database import engine
+from database import engine, async_session
 import models
 import models.telemetry
 from sqlalchemy import text
 from fastapi import FastAPI, HTTPException
 from feature.mqtt import mqtt_worker
 from feature.RFID.attendance import auto_end_loop
+from feature.summary import save_summaries, summarize
+import feature.tool.query.router as tool_router
+import feature.command.router as command_router
+
+
+
+
+
+SUMMARY_INTERVAL_SECONDS = 60*60
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -17,11 +27,28 @@ logging.basicConfig(
 logger = logging.getLogger("main")
 
 
+async def summary_loop():
+    logger.info("Starting summary loop")
+    while True:
+        try:
+            rows = await summarize(hours=1, bucket_minutes=5)
+            await save_summaries(rows)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Lỗi 1 lần chạy không nên giết chết cả vòng lặp — log rồi thử lại ở chu kỳ sau.
+            logger.exception("Lỗi khi chạy summary định kỳ, sẽ thử lại sau %ss.", SUMMARY_INTERVAL_SECONDS)
+ 
+        await asyncio.sleep(SUMMARY_INTERVAL_SECONDS)
+    
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Run the MQTT listener and background tasks for the lifetime of the FastAPI application."""
     logger.info("Starting MQTT listener task...")
     mqtt_task = asyncio.create_task(mqtt_worker.mqtt_listener())
+    summary_task = asyncio.create_task(summary_loop())
 
     logger.info("Starting session auto-end polling task...")
     session_task = asyncio.create_task(
@@ -32,13 +59,15 @@ async def lifespan(app: FastAPI):
     finally:
         logger.info("Stopping background tasks (MQTT listener & session auto-end)...")
         mqtt_task.cancel()
+        summary_task.cancel()
         session_task.cancel()
-        await asyncio.gather(mqtt_task, session_task, return_exceptions=True)
+        await asyncio.gather(mqtt_task, summary_task, session_task, return_exceptions=True)
         logger.info("All background tasks stopped.")
 
 
 app = FastAPI(lifespan=lifespan, title="SmartCampus Edge API", version="0.1.0")
-
+app.include_router(router = tool_router.router)
+app.include_router(command_router.router)
 
 @app.get("/health", tags=["system"])
 async def health_check():

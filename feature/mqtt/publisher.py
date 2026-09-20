@@ -67,6 +67,8 @@ async def publish_room_command(
     room_id: str,
     command_type: RoomCommandType | str,
     command_value: CommandStatus | str,
+    command_id: str | None = None,
+    message_id: str | None = None,
 ) -> None:
     if client is None:
         logger.warning("publish_room_command called with mqtt_client=None")
@@ -74,12 +76,19 @@ async def publish_room_command(
     type_str = _get_enum_value(command_type)
     val_str = _get_enum_value(command_value)
     topic = TOPIC_PUB_ROOM_COMMAND.format(room_id=room_id)
-    message = _build_envelope({
+    payload = {
         "room_id": room_id,
         "command_type": type_str,
         "command_value": val_str,
-    })
-    await client.publish(topic, json.dumps(message))
+    }
+    if command_id:
+        payload["command_id"] = str(command_id)
+    envelope = {
+        "message_id": message_id or str(uuid.uuid4()),
+        "source_timestamp": datetime.now(timezone.utc).isoformat(),
+        "payload": payload,
+    }
+    await client.publish(topic, json.dumps(envelope))
     logger.info("Published room command to %s: %s=%s", topic, type_str, val_str)
 
 
@@ -148,3 +157,32 @@ async def publish_room_discrepancy(
     })
     await client.publish(topic, json.dumps(message))
     logger.info("Published room discrepancy to %s: occ=%d, att=%d, diff=%d (%s)", topic, occupancy_count, attendance_count, discrepancy, status)
+
+
+async def publish_led_strip(
+    client: mqtt.Client | None,
+    room_id: str,
+    color: str,
+    effect: str = "static",
+    brightness: int = 255,
+) -> None:
+    """Publish LED strip color/effect command to room devices.
+
+    Args:
+        color: Hex color string, e.g. "#FF0000"
+        effect: One of "static", "breathe", "strobe"
+        brightness: 0-255
+    """
+    if client is None:
+        logger.warning("publish_led_strip called with mqtt_client=None")
+        return
+    topic = TOPIC_PUB_ROOM_COMMAND.format(room_id=room_id)
+    message = _build_envelope({
+        "room_id": room_id,
+        "command_type": "led_strip",
+        "color": color,
+        "effect": effect,
+        "brightness": brightness,
+    })
+    await client.publish(topic, json.dumps(message))
+    logger.info("Published LED strip to %s: color=%s, effect=%s, brightness=%d", topic, color, effect, brightness)

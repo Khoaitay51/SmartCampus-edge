@@ -16,6 +16,12 @@ from feature.config.config import (
     BROKER_PORT,
     BROKER_USERNAME,
     RECONNECT_INTERVAL,
+    TOPIC_COMMAND_ACK,
+    TOPIC_DEVICE_HEARTBEAT,
+    TOPIC_ENV_TELEMETRY,
+    TOPIC_OCCUPANCY_TELEMETRY,
+    TOPIC_ROOM_RFID_EVENT,
+    TOPIC_SCENARIO,
     TOPIC_SUB_HEARTBEAT,
     TOPIC_SUB_PROVISION,
     TOPIC_SUBSCRIBE_ALL,
@@ -24,6 +30,7 @@ from feature.enum import CommandStatus, RoomCommandType
 from feature.FSM import statemachine
 from feature.mqtt import publisher
 from feature.RFID import attendance
+from feature.command.executor import update_command_status
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +135,7 @@ async def _handle_heartbeat(client: mqtt.Client, payload: dict) -> None:
     firmware_version = inner.get("firmware_version")
     uptime = inner.get("uptime")
 
-    logger.debug("Heartbeat: device=%s, alive=%s, uptime=%s", device_id, alive, uptime)
+    logger.info("Heartbeat: device=%s, alive=%s, uptime=%s", device_id, alive, uptime)
 
     if not device_id:
         logger.warning("Missing device_id in heartbeat: %s", inner)
@@ -339,6 +346,19 @@ async def _handle_command_ack(client: mqtt.Client, payload: dict) -> None:
         inner.get("mac_address"), inner.get("command_id"), inner.get("success"),
     )
 
+    # Update command status in DB
+    success = inner.get("success", True)
+    cmd_id = inner.get("command_id")
+    new_status = "acked" if success else "failed"
+
+    updated = await update_command_status(
+        command_id=UUID(cmd_id) if cmd_id else None,
+        message_id=msg_id,
+        new_status=new_status,
+    )
+    if updated:
+        logger.info("Command status updated to %s (cmd=%s)", new_status, cmd_id or msg_id)
+
 
 async def _handle_scenario(client: mqtt.Client, payload: dict) -> None:
     """Handle automation scenario triggers."""
@@ -358,24 +378,33 @@ async def _dispatch_message(client: mqtt.Client, message: mqtt.Message) -> None:
         logger.warning("Failed to decode message on %s: %s", topic, message.payload)
         return
 
-    logger.debug("Received message on %s: %s", topic, payload)
+    # Skip messages published by this Edge server itself (self-subscribe via wildcard)
+    if (
+        "/command/room/" in topic
+        or "/command/device/" in topic
+        or topic.endswith("/state")
+        or topic.endswith("/discrepancy")
+    ):
+        return
 
-    if topic == TOPIC_SUB_PROVISION:
+    logger.info("Received message on %s: %s", topic, payload)
+
+    if message.topic.matches(TOPIC_SUB_PROVISION):
         await _handle_provision_request(client, payload)
-    elif topic == TOPIC_SUB_HEARTBEAT:
+    elif message.topic.matches(TOPIC_DEVICE_HEARTBEAT):
         await _handle_heartbeat(client, payload)
-    elif "/telemetry/environment" in topic:
+    elif message.topic.matches(TOPIC_ENV_TELEMETRY):
         await _handle_environment_telemetry(client, payload)
-    elif "/telemetry/occupancy" in topic:
+    elif message.topic.matches(TOPIC_OCCUPANCY_TELEMETRY):
         await _handle_occupancy_telemetry(client, payload)
-    elif "/telemetry/rfid" in topic or "/event/rfid" in topic or "/event/room/" in topic:
+    elif message.topic.matches(TOPIC_ROOM_RFID_EVENT) or "/telemetry/rfid" in topic or "/event/rfid" in topic:
         await _handle_rfid_event(client, payload)
-    elif "/response/command_ack" in topic or "/ack/device/" in topic:
+    elif message.topic.matches(TOPIC_COMMAND_ACK) or "/response/command_ack" in topic:
         await _handle_command_ack(client, payload)
-    elif "/scenario" in topic:
+    elif message.topic.matches(TOPIC_SCENARIO):
         await _handle_scenario(client, payload)
     else:
-        logger.debug("Unhandled topic: %s", topic)
+        logger.warning("Unhandled topic received on %s", topic)
 
 
 async def mqtt_listener() -> None:

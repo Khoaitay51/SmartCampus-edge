@@ -7,6 +7,7 @@ class RoomCommandType(Enum):
     FAN = "fan"
     LIGHT = "light"
     BUZZER = "buzzer"
+    LED_STRIP = "led_strip"
 
 
 class CommandStatus(Enum):
@@ -25,7 +26,13 @@ class DeviceStatusEnum(Enum):
     ONLINE = "online"
     OFFLINE = "offline"
 
-class RoomStatusEnum(Enum):
+class SessionStatusEnum(Enum):
     ACTIVE = "active"
     ENDED = "ended"
     CANCELED = "canceled"
+
+
+class LedStripStatus(Enum):
+    STATIC = "static"
+    BREATHE = "breathe"
+    STROBE = "strobe"

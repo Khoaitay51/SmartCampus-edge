@@ -31,7 +31,7 @@ from sqlalchemy import func, insert, select, update
 from database import async_session
 import models
 from models.__enum import RoomModeEnum, RoomStatus
-from feature.enum import CommandStatus, RoomCommandType, RoomStatusEnum
+from feature.enum import CommandStatus, RoomCommandType, SessionStatusEnum
 from feature.FSM.statemachine import RoomState, get_current_state, set_current_state
 from feature.mqtt.mqtt_worker import create_mqtt_client
 from feature.RFID.attendance import handle_auto_end_session
@@ -51,7 +51,7 @@ async def get_session_status(room_id=SAMPLE_ROOM_ID):
             select(models.RoomSession)
             .where(
                 models.RoomSession.room_id == room_id,
-                models.RoomSession.session_status == RoomStatusEnum.ACTIVE.value,
+                models.RoomSession.session_status == SessionStatusEnum.ACTIVE.value,
             )
             .order_by(models.RoomSession.session_start_timestamp.desc())
             .limit(1)
@@ -125,9 +125,9 @@ async def setup_expired_session(room_id=SAMPLE_ROOM_ID, seconds_ago: int = 60):
             update(models.RoomSession)
             .where(
                 models.RoomSession.room_id == room_id,
-                models.RoomSession.session_status == RoomStatusEnum.ACTIVE.value,
+                models.RoomSession.session_status == SessionStatusEnum.ACTIVE.value,
             )
-            .values(session_status=RoomStatusEnum.ENDED.value)
+            .values(session_status=SessionStatusEnum.ENDED.value)
         )
 
         # Tao session moi da het han nhung status = ACTIVE
@@ -139,7 +139,7 @@ async def setup_expired_session(room_id=SAMPLE_ROOM_ID, seconds_ago: int = 60):
                 session_start_timestamp=start_ts,
                 attendance_deadline_timestamp=deadline_ts,
                 session_end_timestamp=end_ts,
-                session_status=RoomStatusEnum.ACTIVE.value,
+                session_status=SessionStatusEnum.ACTIVE.value,
                 is_exam=False,
             )
         )
@@ -152,7 +152,7 @@ async def setup_expired_session(room_id=SAMPLE_ROOM_ID, seconds_ago: int = 60):
     print(f"[+] DA KHOI TAO SESSION HET HAN CHO PHONG {room_id}")
     print("=" * 60)
     print(f"  - Session ID      : {new_session_id}")
-    print(f"  - Status          : {RoomStatusEnum.ACTIVE.value} (Dang ACTIVE de cho auto-close)")
+    print(f"  - Status          : {SessionStatusEnum.ACTIVE.value} (Dang ACTIVE de cho auto-close)")
     print(f"  - Thoi gian bat dau: {start_ts.strftime('%H:%M:%S')}")
     print(f"  - Thoi gian ket thuc: {end_ts.strftime('%H:%M:%S')} (het han truoc day {seconds_ago}s)")
     print(f"  - FSM Room Mode   : LECTURE")
@@ -237,9 +237,9 @@ async def run_full_demo(room_id=SAMPLE_ROOM_ID):
             update(models.RoomSession)
             .where(
                 models.RoomSession.room_id == room_id,
-                models.RoomSession.session_status == RoomStatusEnum.ACTIVE.value,
+                models.RoomSession.session_status == SessionStatusEnum.ACTIVE.value,
             )
-            .values(session_status=RoomStatusEnum.ENDED.value)
+            .values(session_status=SessionStatusEnum.ENDED.value)
         )
         await db.execute(
             insert(models.RoomSession).values(
@@ -249,7 +249,7 @@ async def run_full_demo(room_id=SAMPLE_ROOM_ID):
                 session_start_timestamp=now_ts - timedelta(minutes=45),
                 attendance_deadline_timestamp=now_ts - timedelta(minutes=30),
                 session_end_timestamp=target_end_ts,
-                session_status=RoomStatusEnum.ACTIVE.value,
+                session_status=SessionStatusEnum.ACTIVE.value,
                 is_exam=False,
             )
         )
@@ -283,7 +283,7 @@ async def run_full_demo(room_id=SAMPLE_ROOM_ID):
     test_passed = True
 
     # 1. Session Status
-    if session and session.session_status == RoomStatusEnum.ENDED.value:
+    if session and session.session_status == SessionStatusEnum.ENDED.value:
         print("   [PASSED] 1. Session Status da chuyen sang 'ended'")
     else:
         print(f"   [FAILED] 1. Session Status khong phai 'ended' (hien tai: {session.session_status if session else None})")
