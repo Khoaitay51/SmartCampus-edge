@@ -289,4 +289,58 @@
         }
 
 
+    m. card_registration_request
+
+        topic_subscribe:
+            smartcampus/v1/card/registration/request
+
+        topic_publish:
+            smartcampus/v1/card/registration/request
+
+        usage:
+            Node hành lang (Corridor Node) gửi yêu cầu đăng ký thẻ RFID khi phát hiện thẻ chưa có UUID / chưa đăng ký trong hệ thống (lưu DB dưới dạng pending).
+
+        content:
+        {
+            "message_id": "uuid-string",
+            "source_timestamp": "ISO8601-datetime-string",
+            "payload":
+            {
+                "mac_address": "string (format: XX:XX:XX:XX:XX:XX)",
+                "card_uid": "string",
+                "room_id": "uuid-string (ID hành lang)",
+                "status": "pending",
+                "node_role": "corridor",
+                "note": "string (optional)"
+            }
+        }
+
+
+    n. card_registration_response
+
+        topic_subscribe:
+            smartcampus/v1/card/registration/response/{mac_address}
+
+        topic_publish:
+            smartcampus/v1/card/registration/response/{mac_address}
+
+        usage:
+            Edge Gateway / Server phản hồi trạng thái đăng ký thẻ (pending, approved, rejected) để node hành lang cập nhật màn hình OLED và đổi trạng thái LED/còi Buzzer.
+
+        content:
+        {
+            "message_id": "uuid-string",
+            "source_timestamp": "ISO8601-datetime-string",
+            "payload":
+            {
+                "request_id": "uuid-string",
+                "card_uid": "string",
+                "status": "string (values: pending | approved | rejected)",
+                "assigned_user_id": "uuid-string",
+                "assigned_user_name": "string",
+                "message": "string"
+            }
+        }
+
+
 

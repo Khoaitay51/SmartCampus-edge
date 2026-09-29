@@ -53,3 +53,9 @@ class IRSignalType(Enum):
 class DoorStateEnum(Enum):
     LOCKED = "LOCKED"
     UNLOCKED = "UNLOCKED"
+
+
+class CardRegistrationStatus(Enum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"

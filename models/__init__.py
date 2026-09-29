@@ -7,6 +7,7 @@ from .peripheral import Peripheral, PeripheralAction
 from .session import RoomSession
 from .command import Command, CommandStatusEnum
 from .summarizer import RawSummarizer
+from .card_registration import CardRegistrationRequest
 
 from .telemetry.environment import Environment
 from .telemetry.occupancy import Occupancy
@@ -22,6 +23,7 @@ from .__enum import (
     DeviceStatusEnum,
     IRSignalType,
     DoorStateEnum,
+    CardRegistrationStatus,
 )
 
 __all__ = [
@@ -43,6 +45,8 @@ __all__ = [
     "RoomSession",
     "Command",
     "CommandStatusEnum",
+    "CardRegistrationRequest",
+    "CardRegistrationStatus",
     "Environment",
     "Occupancy",
     "AttendanceEvent",

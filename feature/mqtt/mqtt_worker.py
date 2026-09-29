@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import uuid
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -25,6 +26,7 @@ from feature.config.config import (
     TOPIC_SUB_HEARTBEAT,
     TOPIC_SUB_PROVISION,
     TOPIC_SUBSCRIBE_ALL,
+    TOPIC_CARD_REGISTRATION_REQUEST,
 )
 from feature.enum import CommandStatus, RoomCommandType
 from feature.FSM import statemachine
@@ -369,6 +371,103 @@ async def _handle_scenario(client: mqtt.Client, payload: dict) -> None:
     )
 
 
+async def _handle_card_registration_request(client: mqtt.Client, payload: dict) -> None:
+    """Process card registration request from Corridor Node (or other RFID nodes)."""
+    inner, msg_id, ts = _extract_payload(payload)
+    mac_address = inner.get("mac_address")
+    card_uid = inner.get("card_uid")
+    room_id_str = inner.get("room_id")
+    note = inner.get("note", "Scanned at Corridor RFID Node")
+
+    logger.info(
+        "Card registration request: mac=%s, card=%s, room=%s",
+        mac_address, card_uid, room_id_str,
+    )
+
+    if not card_uid or not mac_address:
+        logger.warning("Missing card_uid or mac_address in registration request: %s", inner)
+        return
+
+    room_uuid = None
+    if room_id_str:
+        try:
+            room_uuid = UUID(str(room_id_str))
+        except (ValueError, TypeError):
+            pass
+
+    async with async_session() as db:
+        try:
+            # 1. Kiem tra xem the da duoc gan cho user nao chua (bang users)
+            user_res = await db.execute(
+                select(models.User).where(models.User.card_uid == card_uid)
+            )
+            existing_user = user_res.scalar_one_or_none()
+
+            if existing_user:
+                logger.info(
+                    "Card %s is already assigned to user %s (%s)",
+                    card_uid, existing_user.username, existing_user.user_id,
+                )
+                await publisher.publish_card_registration_response(
+                    client,
+                    mac_address,
+                    {
+                        "request_id": str(uuid.uuid4()),
+                        "card_uid": card_uid,
+                        "status": "approved",
+                        "assigned_user_id": str(existing_user.user_id),
+                        "assigned_user_name": existing_user.full_name or existing_user.username,
+                        "message": "Thẻ đã được đăng ký và kích hoạt",
+                    },
+                )
+                return
+
+            # 2. Kiem tra xem the da co request PENDING truoc do chua (tranh duplicate spam)
+            req_res = await db.execute(
+                select(models.CardRegistrationRequest).where(
+                    models.CardRegistrationRequest.card_uid == card_uid,
+                    models.CardRegistrationRequest.status == models.CardRegistrationStatus.PENDING,
+                ).limit(1)
+            )
+            existing_req = req_res.scalar_one_or_none()
+
+            if existing_req:
+                req_id = str(existing_req.request_id)
+                logger.info("Pending registration request already exists for card %s (id=%s)", card_uid, req_id)
+            else:
+                # 3. Tao moi ban ghi CardRegistrationRequest voi status PENDING
+                new_req = models.CardRegistrationRequest(
+                    card_uid=card_uid,
+                    mac_address=mac_address,
+                    room_id=room_uuid,
+                    status=models.CardRegistrationStatus.PENDING,
+                    note=note,
+                )
+                db.add(new_req)
+                await db.commit()
+                await db.refresh(new_req)
+                req_id = str(new_req.request_id)
+                logger.info("Saved new CardRegistrationRequest: id=%s, card=%s, status=PENDING", req_id, card_uid)
+
+            # 4. Phan hoi ve Node Hanh lang qua MQTT
+            await publisher.publish_card_registration_response(
+                client,
+                mac_address,
+                {
+                    "request_id": req_id,
+                    "card_uid": card_uid,
+                    "status": "pending",
+                    "assigned_user_id": None,
+                    "assigned_user_name": None,
+                    "message": "Thẻ chưa đăng ký - Yêu cầu đang chờ Admin duyệt",
+                },
+            )
+
+        except Exception as e:
+            await db.rollback()
+            logger.error("Failed to process card registration request: %s", e)
+
+
 async def _dispatch_message(client: mqtt.Client, message: mqtt.Message) -> None:
     """Route an incoming message to the proper handler based on its topic."""
     topic = str(message.topic)
@@ -384,6 +483,7 @@ async def _dispatch_message(client: mqtt.Client, message: mqtt.Message) -> None:
         or "/command/device/" in topic
         or topic.endswith("/state")
         or topic.endswith("/discrepancy")
+        or "/card/registration/response/" in topic
     ):
         return
 
@@ -399,6 +499,8 @@ async def _dispatch_message(client: mqtt.Client, message: mqtt.Message) -> None:
         await _handle_occupancy_telemetry(client, payload)
     elif message.topic.matches(TOPIC_ROOM_RFID_EVENT) or "/telemetry/rfid" in topic or "/event/rfid" in topic:
         await _handle_rfid_event(client, payload)
+    elif message.topic.matches(TOPIC_CARD_REGISTRATION_REQUEST) or "/card/registration/request" in topic:
+        await _handle_card_registration_request(client, payload)
     elif message.topic.matches(TOPIC_COMMAND_ACK) or "/response/command_ack" in topic:
         await _handle_command_ack(client, payload)
     elif message.topic.matches(TOPIC_SCENARIO):
