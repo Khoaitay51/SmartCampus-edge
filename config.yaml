@@ -35,6 +35,10 @@ mqtt:
       topic: smartcampus/v1/scenario/#
       qos: 1
 
+    card_registration_request:
+      topic: smartcampus/v1/card/registration/request
+      qos: 1
+
   publish:
     provisioning_response:
       topic: smartcampus/v1/device/provision/response/{mac_address}
@@ -50,6 +54,11 @@ mqtt:
       topic: smartcampus/v1/device/{mac_address}/status
       qos: 1
       retain: true
+
+    card_registration_response:
+      topic: smartcampus/v1/card/registration/response/{mac_address}
+      qos: 1
+      retain: false
 
     room_command:
       topic: smartcampus/v1/command/room/{room_id}

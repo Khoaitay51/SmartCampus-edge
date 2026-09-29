@@ -12,6 +12,7 @@ from feature.config.config import (
     TOPIC_PUB_DEVICE_STATUS,
     TOPIC_PUB_ROOM_DISCREPANCY,
     TOPIC_PUB_ROOM_NOTABLE_EVENT,
+    TOPIC_PUB_CARD_REGISTRATION_RESPONSE,
 )
 from feature.enum import RoomCommandType, CommandStatus, DeviceCommandEnum, DeviceStatusEnum
 
@@ -220,3 +221,18 @@ async def publish_notable_event(
     envelope = _build_envelope(payload)
     await client.publish(topic, json.dumps(envelope))
     logger.info("Published notable event to %s: [%s] %s", topic, severity.upper(), title)
+
+
+async def publish_card_registration_response(
+    client: mqtt.Client | None,
+    mac_address: str,
+    response_data: dict,
+) -> None:
+    """Publish RFID card registration response to Corridor Node."""
+    if client is None:
+        logger.warning("publish_card_registration_response called with mqtt_client=None")
+        return
+    topic = TOPIC_PUB_CARD_REGISTRATION_RESPONSE.format(mac_address=mac_address)
+    message = _build_envelope(response_data)
+    await client.publish(topic, json.dumps(message), retain=False)
+    logger.info("Published card registration response to %s: %s", topic, response_data)

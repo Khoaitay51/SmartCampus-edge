@@ -300,6 +300,8 @@ Mọi gói tin truyền nhận qua MQTT giữa Gateway và các thiết bị đ�
 | **Environment** | Node -> Gateway | `smartcampus/v1/telemetry/room/{room_id}/environment` | 1 | False | Dữ liệu môi trường: `temperature`, `humidity`, `smoke_state`, `co2` |
 | **Occupancy** | Node -> Gateway | `smartcampus/v1/telemetry/room/{room_id}/occupancy` | 1 | False | Đếm người: `occupancy_type` (in/out), `occupancy_count` |
 | **RFID Event** | Node -> Gateway | `smartcampus/v1/event/room/{room_id}/rfid` | 1 | False | Sự kiện quẹt thẻ: `room_id`, `card_uid`, `event_type` |
+| **Card Reg Request** | Node -> Gateway | `smartcampus/v1/card/registration/request` | 1 | False | Yêu cầu đăng ký thẻ lạ quét tại Hành lang (Corridor Node): `mac_address`, `card_uid`, `room_id`, `status: pending`, `node_role: corridor` |
+| **Card Reg Response**| Gateway -> Node | `smartcampus/v1/card/registration/response/{mac_address}` | 1 | False | Phản hồi kết quả đăng ký/duyệt thẻ: `request_id`, `card_uid`, `status: pending/approved/rejected`, `assigned_user_id`, `assigned_user_name` |
 | **Room State** | Gateway -> All | `smartcampus/v1/room/{room_id}/state` | 1 | **True** | Trạng thái phòng FSM: `room_id`, `room_mode`, `room_status` |
 | **Room Command** | Gateway -> Node | `smartcampus/v1/command/room/{room_id}` | 1 | False | Lệnh chấp hành: `command_type` (door/fan/light/buzzer), `command_value` |
 | **Device Command** | Gateway -> Node | `smartcampus/v1/command/device/{mac_address}` | 1 | False | Lệnh quản trị thiết bị: `command_type` (ota/restart), `command_value` |
@@ -336,6 +338,11 @@ Hệ thống tích hợp **TimescaleDB trên PostgreSQL 17** tối ưu hóa lưu
  │  attendance_records  │ (Bảng điểm danh chính thức: user_id, session_id, late)
  └──────────────────────┘
 
+ ┌──────────────────────────────┐
+ │   card_registration_requests │ (Đăng ký thẻ mới tại hành lang: request_id, card_uid,
+ └──────────────────────────────┘  device_id, room_id, status: PENDING/APPROVED/REJECTED,
+                                   assigned_user_id, created_at, processed_by)
+
  ═════════════════════ TIMESCALEDB HYPERTABLES (Chuỗi thời gian) ═════════════════════
  1. environment       (environment_timestamp, room_id, temp, humidity, smoke_state, co2)
  2. occupancy         (occupancy_timestamp, room_id, occupancy_type, occupancy_count)
@@ -347,6 +354,7 @@ Hệ thống tích hợp **TimescaleDB trên PostgreSQL 17** tối ưu hóa lưu
  8. room_event        (room_event_timestamp, room_id, room_mode, peripheral_action_id)
 ```
 
+- **Đăng ký thẻ lạ tại hành lang (`CardRegistrationRequest`)**: Khi thẻ chưa có trong hệ thống quét tại node hành lang, hệ thống tự động ghi nhận bản ghi với trạng thái `PENDING` vào bảng `card_registration_requests`. Người quản trị thông qua dashboard/API sẽ gán thẻ cho Sinh viên hoặc Giảng viên (`APPROVED`) hoặc từ chối (`REJECTED`).
 - **Hypertables**: Tự động phân mảnh (chunk partitioning) theo thời gian, tăng tốc độ ghi dữ liệu cảm biến đồng thời và hỗ trợ tính toán aggregate cực nhanh.
 - **Concurrency Control**: Áp dụng cơ chế khóa bi quan (`with_for_update()`) cho các thao tác đếm người IR để loại trừ hoàn toàn hiện tượng lệch số đếm khi nhiều người bước qua cửa cùng lúc.
 
