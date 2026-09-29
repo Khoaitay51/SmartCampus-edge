@@ -71,6 +71,11 @@ mqtt:
       qos: 1
       retain: false
 
+    notable_event:
+      topic: smartcampus/v1/event/room/{room_id}/notable
+      qos: 1
+      retain: false
+
   command_types:
     room:
       - mode

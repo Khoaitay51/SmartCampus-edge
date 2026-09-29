@@ -9,7 +9,7 @@ from database import async_session
 import models
 from feature.enum import CommandStatus, RoomCommandType, SessionStatusEnum
 from feature.FSM.statemachine import RoomState, transition_to
-from feature.mqtt.publisher import publish_room_command, publish_room_discrepancy
+from feature.mqtt.publisher import publish_room_command, publish_room_discrepancy, publish_notable_event
 
 import aiomqtt as mqtt
 
@@ -79,6 +79,24 @@ async def check_and_publish_discrepancy(
             "Discrepancy for room %s (session %s): occ=%d, att=%d, diff=%d",
             room_id, session.session_id, occupancy_count, attendance_count, discrepancy,
         )
+
+        if discrepancy != 0 and mqtt_client:
+            diff_text = f"thừa {discrepancy} người chưa điểm danh" if discrepancy > 0 else f"thiếu {abs(discrepancy)} người so với điểm danh"
+            await publish_notable_event(
+                client=mqtt_client,
+                room_id=str(room_id),
+                event_type="occupancy_discrepancy",
+                severity="warning" if abs(discrepancy) <= 3 else "critical",
+                title=f"Lệch sĩ số phòng ({'EXTRA_PEOPLE' if discrepancy > 0 else 'MISSING_PEOPLE'})",
+                description=f"Phòng {room_id} phát hiện {diff_text} (IR đếm: {occupancy_count}, Điểm danh: {attendance_count}).",
+                event_data={
+                    "session_id": str(session.session_id) if session else None,
+                    "occupancy_count": occupancy_count,
+                    "attendance_count": attendance_count,
+                    "discrepancy": discrepancy,
+                    "status": "EXTRA_PEOPLE" if discrepancy > 0 else "MISSING_PEOPLE",
+                },
+            )
     except Exception as e:
         logger.error("Failed to check and publish discrepancy for room %s: %s", room_id, e)
 
@@ -109,6 +127,15 @@ async def handle_unsigned_user(
     if mqtt_client:
         await publish_room_command(
             mqtt_client, str(room_id), RoomCommandType.BUZZER, CommandStatus.ON
+        )
+        await publish_notable_event(
+            client=mqtt_client,
+            room_id=str(room_id),
+            event_type="rfid_unknown",
+            severity="info",
+            title="Quẹt thẻ RFID chưa đăng ký",
+            description=f"Thẻ UID {card_uid or 'Unknown'} vừa quẹt tại cửa phòng {room_id} nhưng chưa được đăng ký trong hệ thống.",
+            event_data={"card_uid": card_uid, "room_id": str(room_id)},
         )
 
 

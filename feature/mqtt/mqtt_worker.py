@@ -227,6 +227,71 @@ async def _handle_environment_telemetry(client: mqtt.Client, payload: dict) -> N
                 await db.rollback()
                 logger.error("Failed to update smoke FSM for room %s: %s", room_id, e)
 
+    # -- Notable event detection (Edge -> AI Agent) -----------------------
+    if room_id and client:
+        # 1. Cảnh báo khói / Nghi ngờ cháy
+        if smoke_state in ("SUSPECTED", "EMERGENCY"):
+            try:
+                await publisher.publish_notable_event(
+                    client=client,
+                    room_id=str(room_id),
+                    event_type="smoke_detected",
+                    severity="critical" if smoke_state == "EMERGENCY" else "warning",
+                    title=f"Phát hiện cảnh báo khói ({smoke_state})",
+                    description=f"Cảm biến MQ2 phát hiện nồng độ khói bất thường tại phòng {room_id} (giá trị: {smoke_value}, ngưỡng: {smoke_threshold}).",
+                    event_data={
+                        "smoke_state": smoke_state,
+                        "smoke_value": smoke_value,
+                        "smoke_threshold": smoke_threshold,
+                    },
+                )
+            except Exception as exc:
+                logger.error("Failed to publish smoke notable event: %s", exc)
+
+        # 2. Nhiệt độ bất thường
+        if temperature is not None:
+            try:
+                temp_val = float(temperature)
+                if temp_val > 38.0 or temp_val < 15.0:
+                    await publisher.publish_notable_event(
+                        client=client,
+                        room_id=str(room_id),
+                        event_type="temperature_anomaly",
+                        severity="critical" if temp_val >= 42.0 else "warning",
+                        title=f"Nhiệt độ phòng bất thường ({temp_val}°C)",
+                        description=f"Nhiệt độ đo được tại phòng {room_id} là {temp_val}°C, vượt ngưỡng an toàn (15°C - 38°C).",
+                        event_data={
+                            "temperature": temp_val,
+                            "humidity": humidity,
+                        },
+                    )
+            except (ValueError, TypeError):
+                pass
+            except Exception as exc:
+                logger.error("Failed to publish temperature notable event: %s", exc)
+
+        # 3. Nồng độ CO2 cao / chất lượng không khí kém
+        if co2 is not None:
+            try:
+                co2_val = float(co2)
+                if co2_val > 1000.0:
+                    await publisher.publish_notable_event(
+                        client=client,
+                        room_id=str(room_id),
+                        event_type="co2_hazard",
+                        severity="critical" if co2_val >= 1500.0 else "warning",
+                        title=f"Nồng độ CO2 vượt ngưỡng an toàn ({co2_val} ppm)",
+                        description=f"Nồng độ CO2 tại phòng {room_id} đạt {co2_val} ppm, không khí ngột ngạt cần bật quạt/thông gió.",
+                        event_data={
+                            "co2": co2_val,
+                            "air_quality": air_quality,
+                        },
+                    )
+            except (ValueError, TypeError):
+                pass
+            except Exception as exc:
+                logger.error("Failed to publish CO2 notable event: %s", exc)
+
 
 async def _handle_occupancy_telemetry(client: mqtt.Client, payload: dict) -> None:
     """Store occupancy count changes from IR sensors with clamp and mode protection."""

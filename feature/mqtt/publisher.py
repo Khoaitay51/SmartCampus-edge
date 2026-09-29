@@ -11,6 +11,7 @@ from feature.config.config import (
     TOPIC_PUB_DEVICE_COMMAND,
     TOPIC_PUB_DEVICE_STATUS,
     TOPIC_PUB_ROOM_DISCREPANCY,
+    TOPIC_PUB_ROOM_NOTABLE_EVENT,
 )
 from feature.enum import RoomCommandType, CommandStatus, DeviceCommandEnum, DeviceStatusEnum
 
@@ -186,3 +187,36 @@ async def publish_led_strip(
     })
     await client.publish(topic, json.dumps(message))
     logger.info("Published LED strip to %s: color=%s, effect=%s, brightness=%d", topic, color, effect, brightness)
+
+
+async def publish_notable_event(
+    client: mqtt.Client | None,
+    room_id: str,
+    event_type: str,
+    title: str,
+    description: str,
+    severity: str = "warning",
+    event_data: dict | None = None,
+    requires_agent: bool = True,
+) -> None:
+    """Publish a notable event from Edge to notify AI Agent and Digital Twin.
+
+    Topic: smartcampus/v1/event/room/{room_id}/notable
+    """
+    if client is None:
+        logger.warning("publish_notable_event called with mqtt_client=None")
+        return
+    topic = TOPIC_PUB_ROOM_NOTABLE_EVENT.format(room_id=room_id)
+    payload = {
+        "event_id": str(uuid.uuid4()),
+        "event_type": event_type,
+        "severity": severity,
+        "room_id": str(room_id),
+        "title": title,
+        "description": description,
+        "event_data": event_data or {},
+        "requires_agent": requires_agent,
+    }
+    envelope = _build_envelope(payload)
+    await client.publish(topic, json.dumps(envelope))
+    logger.info("Published notable event to %s: [%s] %s", topic, severity.upper(), title)

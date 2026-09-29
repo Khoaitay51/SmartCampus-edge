@@ -27,6 +27,7 @@ TOPIC_OCCUPANCY_TELEMETRY  = mqtt_config["subscribe"]["occupancy_telemetry"]["to
 TOPIC_ROOM_RFID_EVENT      = mqtt_config["subscribe"]["room_rfid_event"]["topic"]
 TOPIC_COMMAND_ACK          = mqtt_config["subscribe"]["command_ack"]["topic"]
 TOPIC_SCENARIO             = mqtt_config["subscribe"]["scenario"]["topic"]
+TOPIC_CARD_REGISTRATION    = mqtt_config["subscribe"].get("card_registration", {}).get("topic", "smartcampus/v1/event/card/registration")
 
 # Aliases for backward-compatibility
 TOPIC_SUB_PROVISION = TOPIC_PROVISIONING_REQUEST
@@ -40,6 +41,8 @@ TOPIC_PUB_ROOM_COMMAND          = mqtt_config["publish"]["room_command"]["topic"
 TOPIC_PUB_DEVICE_COMMAND        = mqtt_config["publish"]["device_command"]["topic"]
 TOPIC_PUB_COMMAND_ACK           = mqtt_config["publish"]["command_ack"]["topic"]
 TOPIC_PUB_ROOM_DISCREPANCY      = mqtt_config["publish"].get("discrepancy", {}).get("topic", "smartcampus/v1/room/{room_id}/discrepancy")
+TOPIC_PUB_ROOM_NOTABLE_EVENT    = mqtt_config["publish"].get("notable_event", {}).get("topic", "smartcampus/v1/event/room/{room_id}/notable")
+
 
 # Global subscribe pattern (namespace + wildcard)
 TOPIC_SUBSCRIBE_ALL = mqtt_config["namespace"] + "/#"
