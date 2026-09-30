@@ -7,6 +7,7 @@ import models
 import models.telemetry
 from sqlalchemy import text
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from feature.mqtt import mqtt_worker
 from feature.RFID.attendance import auto_end_loop
 from feature.summary import save_summaries, summarize
@@ -66,7 +67,16 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan, title="SmartCampus Edge API", version="0.1.0")
-app.include_router(router = tool_router.router)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(router=tool_router.router)
 app.include_router(command_router.router)
 
 @app.get("/health", tags=["system"])

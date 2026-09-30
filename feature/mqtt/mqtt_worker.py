@@ -143,11 +143,36 @@ async def _handle_heartbeat(client: mqtt.Client, payload: dict) -> None:
         logger.warning("Missing device_id in heartbeat: %s", inner)
         return
 
-    dev_uuid = UUID(str(device_id))
+    dev_uuid: UUID | None = None
+    try:
+        dev_uuid = UUID(str(device_id))
+    except (ValueError, TypeError):
+        dev_uuid = None
+
     ts_dt = _parse_timestamp(ts)
 
     async with async_session() as db:
         try:
+            if dev_uuid is None:
+                # Find device by MAC address
+                dev_res = await db.execute(
+                    select(models.Device).where(models.Device.mac_address == str(device_id))
+                )
+                existing_dev = dev_res.scalar_one_or_none()
+                if existing_dev:
+                    dev_uuid = existing_dev.device_id
+                else:
+                    dev_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, str(device_id))
+                    new_dev = models.Device(
+                        device_id=dev_uuid,
+                        mac_address=str(device_id),
+                        device_name=f"esp32_{str(device_id).replace(':', '')[-4:]}",
+                        device_status=models.DeviceStatusEnum.online if alive else models.DeviceStatusEnum.offline,
+                        last_seen_timestamp=ts_dt,
+                    )
+                    db.add(new_dev)
+                    await db.flush()
+
             await db.execute(
                 insert(models.DeviceHeartbeat).values(
                     device_id=dev_uuid,
@@ -170,6 +195,7 @@ async def _handle_heartbeat(client: mqtt.Client, payload: dict) -> None:
         except Exception as e:
             await db.rollback()
             logger.error("Failed to insert heartbeat telemetry: %s", e)
+
 
 
 async def _handle_environment_telemetry(client: mqtt.Client, payload: dict) -> None:
@@ -533,6 +559,45 @@ async def _handle_card_registration_request(client: mqtt.Client, payload: dict) 
             logger.error("Failed to process card registration request: %s", e)
 
 
+async def _handle_device_status(client: mqtt.Client, payload: dict, topic: str) -> None:
+    """Handle device status updates and LWT offline messages (FR-DM-05)."""
+    inner, msg_id, ts = _extract_payload(payload)
+    device_id = inner.get("device_id")
+    if not device_id:
+        parts = topic.split("/")
+        if len(parts) >= 4:
+            device_id = parts[3]
+    status_str = inner.get("device_status", "offline")
+    status_enum = models.DeviceStatusEnum.online if status_str == "online" else models.DeviceStatusEnum.offline
+    ts_dt = _parse_timestamp(ts)
+
+    async with async_session() as db:
+        try:
+            dev_uuid = None
+            try:
+                dev_uuid = UUID(str(device_id))
+            except (ValueError, TypeError):
+                pass
+
+            if dev_uuid:
+                await db.execute(
+                    update(models.Device)
+                    .where(models.Device.device_id == dev_uuid)
+                    .values(device_status=status_enum, last_seen_timestamp=ts_dt)
+                )
+            else:
+                await db.execute(
+                    update(models.Device)
+                    .where(models.Device.mac_address == str(device_id))
+                    .values(device_status=status_enum, last_seen_timestamp=ts_dt)
+                )
+            await db.commit()
+            logger.info("Updated device status: device=%s, status=%s", device_id, status_str)
+        except Exception as e:
+            await db.rollback()
+            logger.error("Failed to update device status: %s", e)
+
+
 async def _dispatch_message(client: mqtt.Client, message: mqtt.Message) -> None:
     """Route an incoming message to the proper handler based on its topic."""
     topic = str(message.topic)
@@ -570,6 +635,8 @@ async def _dispatch_message(client: mqtt.Client, message: mqtt.Message) -> None:
         await _handle_command_ack(client, payload)
     elif message.topic.matches(TOPIC_SCENARIO):
         await _handle_scenario(client, payload)
+    elif "/device/" in topic and topic.endswith("/status"):
+        await _handle_device_status(client, payload, topic)
     else:
         logger.warning("Unhandled topic received on %s", topic)
 
