@@ -9,3 +9,4 @@ aiomqtt
 asyncpg
 pyyaml
 scheduler
+greenlet
