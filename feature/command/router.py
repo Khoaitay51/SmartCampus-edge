@@ -40,9 +40,14 @@ async def execute_room_cmd(req: RoomCommandRequest):
     Returns 202 Accepted with command tracking info.
     """
     try:
+        try:
+            target_uuid = UUID(req.room_id)
+        except ValueError:
+            target_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, req.room_id)
+
         async with create_mqtt_client(identifier=f"edge-cmd-{uuid.uuid4().hex[:8]}") as client:
             result = await execute_room_command(
-                room_id=UUID(req.room_id),
+                room_id=target_uuid,
                 command_type=req.command_type,
                 command_value=req.command_value,
                 mqtt_client=client,
