@@ -9,7 +9,11 @@ from sqlalchemy import update
 import aiomqtt as mqtt
 from models.command import Command, CommandStatusEnum
 from database import async_session
-from feature.mqtt.publisher import publish_room_command, publish_device_command
+from feature.mqtt.publisher import (
+    publish_room_command,
+    publish_device_command,
+    publish_led_strip,
+)
 from feature.enum import RoomCommandType, CommandStatus, DeviceCommandEnum
 
 logger = logging.getLogger(__name__)
@@ -76,6 +80,42 @@ async def execute_room_command(
             await db.rollback()
             logger.error("Failed to persist command: %s", e)
             raise
+
+    # If command_type is "mode", trigger FSM transition_to to sync TimescaleDB, publish /state and LED strip!
+    if command_type == "mode":
+        from feature.FSM.statemachine import (
+            transition_to,
+            get_current_state,
+            set_current_state,
+            RoomState,
+            SmokeState,
+            DoorState,
+            _LED_CONFIG,
+        )
+        mode_key = command_value.upper().replace("-", "_")
+        try:
+            target_state = RoomState[mode_key]
+            async with async_session() as fsm_db:
+                current_state = await get_current_state(room_id, RoomState, fsm_db)
+                if current_state in (RoomState.EMERGENCY, RoomState.SUSPECTED):
+                    # Manual/Operator override from EMERGENCY/SUSPECTED
+                    await set_current_state(room_id, target_state, fsm_db, mqtt_client=mqtt_client)
+                    await set_current_state(room_id, SmokeState.NORMAL, fsm_db, mqtt_client=mqtt_client)
+                    door_st = DoorState.LOCKED if target_state == RoomState.EXAM else DoorState.UNLOCKED
+                    await set_current_state(room_id, door_st, fsm_db, mqtt_client=mqtt_client)
+                    if mqtt_client:
+                        await publish_room_command(
+                            mqtt_client, str(room_id),
+                            RoomCommandType.BUZZER, CommandStatus.OFF,
+                        )
+                        led_color, led_effect = _LED_CONFIG.get(target_state, ("#000000", "static"))
+                        await publish_led_strip(mqtt_client, str(room_id), led_color, led_effect)
+                else:
+                    await transition_to(room_id, target_state, fsm_db, mqtt_client=mqtt_client)
+                await fsm_db.commit()
+            logger.info("Room %s: FSM transitioned to %s via mode command (previous: %s)", room_id, target_state.name, current_state.name)
+        except Exception as fsm_err:
+            logger.warning("FSM transition failed for mode '%s' in room %s: %s", command_value, room_id, fsm_err)
 
     # Publish to MQTT
     if mqtt_client:

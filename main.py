@@ -13,6 +13,7 @@ from feature.RFID.attendance import auto_end_loop
 from feature.summary import save_summaries, summarize
 import feature.tool.query.router as tool_router
 import feature.command.router as command_router
+import feature.RFID.sync_router as card_sync_router
 
 
 
@@ -78,6 +79,7 @@ app.add_middleware(
 
 app.include_router(router=tool_router.router)
 app.include_router(command_router.router)
+app.include_router(card_sync_router.router)
 
 @app.get("/health", tags=["system"])
 async def health_check():

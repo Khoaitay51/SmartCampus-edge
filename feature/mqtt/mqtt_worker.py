@@ -153,25 +153,34 @@ async def _handle_heartbeat(client: mqtt.Client, payload: dict) -> None:
 
     async with async_session() as db:
         try:
-            if dev_uuid is None:
-                # Find device by MAC address
+            existing_dev = None
+            if dev_uuid:
+                existing_dev = (await db.execute(
+                    select(models.Device).where(models.Device.device_id == dev_uuid)
+                )).scalar_one_or_none()
+
+            if not existing_dev:
+                mac_candidate = inner.get("mac_address") or str(device_id)
                 dev_res = await db.execute(
-                    select(models.Device).where(models.Device.mac_address == str(device_id))
+                    select(models.Device).where(models.Device.mac_address == mac_candidate)
                 )
                 existing_dev = dev_res.scalar_one_or_none()
-                if existing_dev:
-                    dev_uuid = existing_dev.device_id
-                else:
+
+            if existing_dev:
+                dev_uuid = existing_dev.device_id
+            else:
+                if dev_uuid is None:
                     dev_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, str(device_id))
-                    new_dev = models.Device(
-                        device_id=dev_uuid,
-                        mac_address=str(device_id),
-                        device_name=f"esp32_{str(device_id).replace(':', '')[-4:]}",
-                        device_status=models.DeviceStatusEnum.online if alive else models.DeviceStatusEnum.offline,
-                        last_seen_timestamp=ts_dt,
-                    )
-                    db.add(new_dev)
-                    await db.flush()
+                mac_str = inner.get("mac_address") or str(device_id)
+                new_dev = models.Device(
+                    device_id=dev_uuid,
+                    mac_address=mac_str,
+                    device_name=f"esp32_{mac_str.replace(':', '')[-4:]}",
+                    device_status=models.DeviceStatusEnum.online if alive else models.DeviceStatusEnum.offline,
+                    last_seen_timestamp=ts_dt,
+                )
+                db.add(new_dev)
+                await db.flush()
 
             await db.execute(
                 insert(models.DeviceHeartbeat).values(
@@ -559,6 +568,70 @@ async def _handle_card_registration_request(client: mqtt.Client, payload: dict) 
             logger.error("Failed to process card registration request: %s", e)
 
 
+async def _handle_card_registration_response(client: mqtt.Client, payload: dict) -> None:
+    """Sync approved card registration from Web UI / AI Backend into Edge DB."""
+    inner, msg_id, ts = _extract_payload(payload)
+    card_uid = inner.get("card_uid")
+    status = str(inner.get("status", "")).lower()
+    assigned_user_id_str = inner.get("assigned_user_id")
+    assigned_name = inner.get("assigned_user_name") or "Người dùng"
+    role_str = str(inner.get("role", "student")).lower()
+    username = inner.get("username") or f"user_{card_uid}"
+
+    if status != "approved" or not card_uid:
+        return
+
+    logger.info("Auto-sync: Nhận phản hồi duyệt thẻ %s cho user %s (role: %s) -> Đồng bộ Edge DB", card_uid, assigned_name, role_str)
+
+    role_enum = models.UserRole.LECTURER if ("lecturer" in role_str or "giang" in role_str) else (
+        models.UserRole.ADMIN if "admin" in role_str else models.UserRole.STUDENT
+    )
+
+    try:
+        assigned_uuid = UUID(str(assigned_user_id_str)) if assigned_user_id_str else uuid.uuid4()
+    except (ValueError, TypeError):
+        assigned_uuid = uuid.uuid4()
+
+    async with async_session() as db:
+        try:
+            # 1. Update existing user holding this card if any (ix_users_card_uid is unique)
+            existing_by_card = (await db.execute(select(models.User).where(models.User.card_uid == card_uid))).scalar_one_or_none()
+            if existing_by_card and existing_by_card.user_id != assigned_uuid:
+                existing_by_card.card_uid = None
+
+            # 2. Insert or update User
+            existing_user = (await db.execute(select(models.User).where(models.User.user_id == assigned_uuid))).scalar_one_or_none()
+            if existing_user:
+                existing_user.card_uid = card_uid
+                existing_user.role = role_enum
+                existing_user.full_name = assigned_name
+                if username:
+                    existing_user.username = username
+            else:
+                new_user = models.User(
+                    user_id=assigned_uuid,
+                    card_uid=card_uid,
+                    role=role_enum,
+                    username=username,
+                    full_name=assigned_name,
+                )
+                db.add(new_user)
+
+            # 3. Update CardRegistrationRequest
+            req = (await db.execute(
+                select(models.CardRegistrationRequest).where(models.CardRegistrationRequest.card_uid == card_uid)
+            )).scalar_one_or_none()
+            if req:
+                req.status = models.CardRegistrationStatus.APPROVED
+                req.assigned_user_id = assigned_uuid
+
+            await db.commit()
+            logger.info("Auto-sync: Đã đồng bộ thành công thẻ %s (%s - %s) vào Edge DB", card_uid, assigned_name, role_enum.value)
+        except Exception as e:
+            await db.rollback()
+            logger.error("Auto-sync: Lỗi khi đồng bộ thẻ %s vào Edge DB: %s", card_uid, e)
+
+
 async def _handle_device_status(client: mqtt.Client, payload: dict, topic: str) -> None:
     """Handle device status updates and LWT offline messages (FR-DM-05)."""
     inner, msg_id, ts = _extract_payload(payload)
@@ -613,7 +686,6 @@ async def _dispatch_message(client: mqtt.Client, message: mqtt.Message) -> None:
         or "/command/device/" in topic
         or topic.endswith("/state")
         or topic.endswith("/discrepancy")
-        or "/card/registration/response/" in topic
     ):
         return
 
@@ -631,6 +703,8 @@ async def _dispatch_message(client: mqtt.Client, message: mqtt.Message) -> None:
         await _handle_rfid_event(client, payload)
     elif message.topic.matches(TOPIC_CARD_REGISTRATION_REQUEST) or "/card/registration/request" in topic:
         await _handle_card_registration_request(client, payload)
+    elif "/card/registration/response" in topic:
+        await _handle_card_registration_response(client, payload)
     elif message.topic.matches(TOPIC_COMMAND_ACK) or "/response/command_ack" in topic:
         await _handle_command_ack(client, payload)
     elif message.topic.matches(TOPIC_SCENARIO):
