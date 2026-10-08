@@ -68,6 +68,15 @@ def _extract_payload(raw: dict) -> tuple[dict, str | None, str | None]:
     return inner, msg_id, ts
 
 
+def _make_envelope(inner: dict) -> dict:
+    """Wrap a payload in the standard edge telemetry envelope."""
+    return {
+        "message_id": str(uuid.uuid4()),
+        "source_timestamp": datetime.now(timezone.utc).isoformat(),
+        "payload": inner,
+    }
+
+
 async def _handle_provision_request(client: mqtt.Client, payload: dict) -> None:
     """Store auto-provisioning requests and respond if device is already configured."""
     inner, msg_id, ts = _extract_payload(payload)
@@ -207,6 +216,17 @@ async def _handle_heartbeat(client: mqtt.Client, payload: dict) -> None:
 
 
 
+async def _ensure_room_exists(db, room_id: UUID | None, room_name: str | None = None) -> None:
+    """Đảm bảo room_id đã tồn tại trong bảng room để tránh lỗi Foreign Key."""
+    if room_id is None:
+        return
+    res = await db.execute(select(models.Room).where(models.Room.room_id == room_id))
+    if res.scalar_one_or_none() is None:
+        name = room_name or f"Room {str(room_id)[:6]}"
+        db.add(models.Room(room_id=room_id, room_name=name, room_type=models.RoomType.CLASSROOM))
+        await db.flush()
+
+
 async def _handle_environment_telemetry(client: mqtt.Client, payload: dict) -> None:
     """Store environment sensor readings (temp, humidity, smoke, CO2, air_quality)."""
     inner, msg_id, ts = _extract_payload(payload)
@@ -226,11 +246,14 @@ async def _handle_environment_telemetry(client: mqtt.Client, payload: dict) -> N
         room_id, temperature, humidity, smoke_state, co2, air_quality,
     )
 
+    r_uuid = UUID(str(room_id)) if room_id else None
+
     async with async_session() as db:
         try:
+            await _ensure_room_exists(db, r_uuid)
             await db.execute(
                 insert(models.Environment).values(
-                    room_id=UUID(str(room_id)) if room_id else None,
+                    room_id=r_uuid,
                     temperature=temperature,
                     humidity=humidity,
                     smoke_detected=smoke_detected,
@@ -356,6 +379,7 @@ async def _handle_occupancy_telemetry(client: mqtt.Client, payload: dict) -> Non
     async with async_session() as db:
         try:
             async with db.begin():
+                await _ensure_room_exists(db, room_uuid)
                 result = await db.execute(
                     select(models.Occupancy.occupancy_count)
                     .where(models.Occupancy.room_id == room_uuid)
@@ -401,6 +425,25 @@ async def _handle_occupancy_telemetry(client: mqtt.Client, payload: dict) -> Non
             await attendance.check_and_publish_discrepancy(
                 client, room_uuid, db, current_occupancy=new_count
             )
+
+            # Publish updated occupancy telemetry to Mosquitto MQTT for real-time WebSocket & UI sync
+            try:
+                occ_payload = _make_envelope(
+                    {
+                        "room_id": str(room_uuid),
+                        "occupancy": new_count,
+                        "occupancy_count": new_count,
+                        "count": new_count,
+                        "occupancy_type": "COUNT",
+                    }
+                )
+                client.publish(
+                    f"smartcampus/v1/telemetry/room/{room_uuid}/occupancy",
+                    json.dumps(occ_payload),
+                    qos=1,
+                )
+            except Exception as e:
+                logger.warning("Failed to publish updated occupancy telemetry: %s", e)
         except Exception as e:
             logger.error("Failed to insert occupancy telemetry: %s", e)
 
@@ -423,6 +466,9 @@ async def _handle_rfid_event(client: mqtt.Client, payload: dict) -> None:
 
     async with async_session() as db:
         try:
+            r_uuid = UUID(str(room_id))
+            await _ensure_room_exists(db, r_uuid)
+            await db.commit()
             result = await db.execute(
                 select(models.User.user_id).where(models.User.card_uid == card_uid)
             )
