@@ -61,6 +61,38 @@ async def execute_room_command(
             f"Valid: {valid_values}"
         )
 
+    from feature.FSM.statemachine import (
+        transition_to,
+        get_current_state,
+        set_current_state,
+        RoomState,
+        SmokeState,
+        DoorState,
+        _LED_CONFIG,
+    )
+
+    # 1. Edge FSM Invariant Barrier (Dual-Sovereignty Barrier Certificate)
+    async with async_session() as fsm_db:
+        current_state = await get_current_state(room_id, RoomState, fsm_db)
+
+    # Invariant A: Không được mở cửa khi phòng đang ở chế độ THI (EXAM) hoặc KHÓA (LOCK)
+    if current_state in (RoomState.EXAM, RoomState.LOCK):
+        if command_type == "door" and command_value == "unlocked":
+            logger.warning(
+                "🚨 [EDGE FSM BARRIER BLOCKED] Phòng %s đang ở chế độ %s. Chặn đứng lệnh mở cửa (source: %s, reason: %s)!",
+                room_id, current_state.name, source, reason,
+            )
+            raise ValueError(f"FSM Safety Invariant Violated: Cannot unlock door while room is in {current_state.name} mode.")
+
+    # Invariant B: Không được khóa cửa khi phòng đang có sự cố KHẨN CẤP (EMERGENCY)
+    if current_state == RoomState.EMERGENCY:
+        if command_type == "door" and command_value == "locked":
+            logger.warning(
+                "🚨 [EDGE FSM BARRIER BLOCKED] Phòng %s đang ở chế độ EMERGENCY. Chặn đứng lệnh khóa cửa thoát hiểm (source: %s)!",
+                room_id, source,
+            )
+            raise ValueError("FSM Safety Invariant Violated: Cannot lock exit door during EMERGENCY state.")
+
     command_id = uuid.uuid4()
     msg_id = str(uuid.uuid4())
 
@@ -81,20 +113,26 @@ async def execute_room_command(
             logger.error("Failed to persist command: %s", e)
             raise
 
+    # If command_type is "door", sync DoorState in TimescaleDB FSM
+    if command_type == "door":
+        door_st = DoorState.LOCKED if command_value == "locked" else DoorState.UNLOCKED
+        try:
+            async with async_session() as fsm_db:
+                await set_current_state(room_id, door_st, fsm_db, mqtt_client=mqtt_client)
+                await fsm_db.commit()
+        except Exception as door_err:
+            logger.warning("Failed to sync DoorState in FSM for room %s: %s", room_id, door_err)
+
     # If command_type is "mode", trigger FSM transition_to to sync TimescaleDB, publish /state and LED strip!
     if command_type == "mode":
-        from feature.FSM.statemachine import (
-            transition_to,
-            get_current_state,
-            set_current_state,
-            RoomState,
-            SmokeState,
-            DoorState,
-            _LED_CONFIG,
-        )
+        from feature.FSM.statemachine import TransitionError
         mode_key = command_value.upper().replace("-", "_")
         try:
             target_state = RoomState[mode_key]
+        except KeyError:
+            raise ValueError(f"Unknown room mode '{command_value}'. Valid modes: {[s.name.lower() for s in RoomState]}")
+
+        try:
             async with async_session() as fsm_db:
                 current_state = await get_current_state(room_id, RoomState, fsm_db)
                 if current_state in (RoomState.EMERGENCY, RoomState.SUSPECTED):
@@ -114,8 +152,12 @@ async def execute_room_command(
                     await transition_to(room_id, target_state, fsm_db, mqtt_client=mqtt_client)
                 await fsm_db.commit()
             logger.info("Room %s: FSM transitioned to %s via mode command (previous: %s)", room_id, target_state.name, current_state.name)
+        except TransitionError as fsm_err:
+            logger.warning("🚨 [FSM TRANSITION BLOCKED] Room %s: %s", room_id, fsm_err)
+            raise ValueError(f"FSM Barrier Violation: {str(fsm_err)}")
         except Exception as fsm_err:
             logger.warning("FSM transition failed for mode '%s' in room %s: %s", command_value, room_id, fsm_err)
+            raise ValueError(f"FSM transition failed: {str(fsm_err)}")
 
     # Publish to MQTT
     if mqtt_client:
