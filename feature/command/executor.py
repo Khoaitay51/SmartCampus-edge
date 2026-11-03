@@ -15,6 +15,7 @@ from feature.mqtt.publisher import (
     publish_led_strip,
 )
 from feature.enum import RoomCommandType, CommandStatus, DeviceCommandEnum
+from .interlock import check_expected_state, check_room_command
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,8 @@ async def execute_room_command(
     mqtt_client: mqtt.Client | None = None,
     reason: str = "",
     source: str = "api",
+    expected_mode: str | None = None,
+    expected_state_version: str | None = None,
 ) -> dict:
     """
     Execute a room command: validate -> persist to DB -> publish MQTT.
@@ -64,6 +67,7 @@ async def execute_room_command(
     from feature.FSM.statemachine import (
         transition_to,
         get_current_state,
+        get_state_snapshot,
         set_current_state,
         RoomState,
         SmokeState,
@@ -71,27 +75,26 @@ async def execute_room_command(
         _LED_CONFIG,
     )
 
-    # 1. Edge FSM Invariant Barrier (Dual-Sovereignty Barrier Certificate)
+    # 1. Edge FSM Interlock (Dual-Sovereignty Barrier Certificate) — xem interlock.py.
+    #    LƯU Ý: đọc snapshot rồi ghi ở các bước sau chưa nằm trong cùng một transaction/lock,
+    #    nên vẫn còn một cửa sổ race rất hẹp; có thể đóng bằng pg advisory lock theo room_id.
     async with async_session() as fsm_db:
-        current_state = await get_current_state(room_id, RoomState, fsm_db)
+        snapshot_state, state_version = await get_state_snapshot(room_id, RoomState, fsm_db)
+    current_state = snapshot_state
 
-    # Invariant A: Không được mở cửa khi phòng đang ở chế độ THI (EXAM) hoặc KHÓA (LOCK)
-    if current_state in (RoomState.EXAM, RoomState.LOCK):
-        if command_type == "door" and command_value == "unlocked":
-            logger.warning(
-                "🚨 [EDGE FSM BARRIER BLOCKED] Phòng %s đang ở chế độ %s. Chặn đứng lệnh mở cửa (source: %s, reason: %s)!",
-                room_id, current_state.name, source, reason,
-            )
-            raise ValueError(f"FSM Safety Invariant Violated: Cannot unlock door while room is in {current_state.name} mode.")
-
-    # Invariant B: Không được khóa cửa khi phòng đang có sự cố KHẨN CẤP (EMERGENCY)
-    if current_state == RoomState.EMERGENCY:
-        if command_type == "door" and command_value == "locked":
-            logger.warning(
-                "🚨 [EDGE FSM BARRIER BLOCKED] Phòng %s đang ở chế độ EMERGENCY. Chặn đứng lệnh khóa cửa thoát hiểm (source: %s)!",
-                room_id, source,
-            )
-            raise ValueError("FSM Safety Invariant Violated: Cannot lock exit door during EMERGENCY state.")
+    try:
+        # Approval phải còn hiệu lực: phòng vẫn ở đúng trạng thái người duyệt đã thấy.
+        check_expected_state(
+            current_state.name, state_version, expected_mode, expected_state_version,
+        )
+        # Bất biến A/B + ma trận quyền theo mode cho nguồn AI.
+        check_room_command(current_state.name, command_type, command_value, source)
+    except ValueError as barrier_err:
+        logger.warning(
+            "🚨 [EDGE FSM BARRIER BLOCKED] room=%s mode=%s cmd=%s:%s source=%s reason=%s -> %s",
+            room_id, current_state.name, command_type, command_value, source, reason, barrier_err,
+        )
+        raise
 
     command_id = uuid.uuid4()
     msg_id = str(uuid.uuid4())
