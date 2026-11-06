@@ -47,6 +47,8 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       MQTT_HOST: mosquitto
       MQTT_PORT: 1883
+      SAFETY_FSM_ENABLED: ${SAFETY_FSM_ENABLED:-true}
+      SAFETY_TOCTOU_BINDING_ENABLED: ${SAFETY_TOCTOU_BINDING_ENABLED:-true}
     ports:
       - "${API_PORT:-8000}:8000"
     depends_on:
