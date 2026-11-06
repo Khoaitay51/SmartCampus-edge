@@ -13,6 +13,28 @@ qua các kiểm tra dưới đây trước khi xuống MQTT:
 """
 from __future__ import annotations
 
+import os
+
+_FALSY_FLAGS: frozenset[str] = frozenset({"0", "false", "no", "off"})
+
+
+def _env_flag(name: str, default: bool = True) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in _FALSY_FLAGS
+
+
+def is_edge_fsm_enabled() -> bool:
+    """Kiểm tra cờ SAFETY_FSM_ENABLED (mặc định True). Khi False: mọi tool chạy global."""
+    return _env_flag("SAFETY_FSM_ENABLED", True)
+
+
+def is_toctou_binding_enabled() -> bool:
+    """Kiểm tra cờ SAFETY_TOCTOU_BINDING_ENABLED (mặc định True). Khi False: bỏ qua check_expected_state."""
+    return _env_flag("SAFETY_TOCTOU_BINDING_ENABLED", True)
+
+
 AI_SOURCES: frozenset[str] = frozenset({"ai_agent", "admin_hitl"})
 
 # command_type được phép cho lệnh do AI khởi phát, theo chế độ phòng.
@@ -103,7 +125,10 @@ def check_expected_state(
 
     Chỉ kiểm tra những trường mà caller cung cấp. ``expected_version`` được so sánh
     chính xác để bắt cả trường hợp đổi mode rồi quay lại cùng giá trị (A→B→A).
+    Nếu ``SAFETY_TOCTOU_BINDING_ENABLED=false`` -> bỏ qua kiểm tra độ tươi trạng thái.
     """
+    if not is_toctou_binding_enabled():
+        return
     if expected_mode:
         if (current_mode or "").upper().strip() != expected_mode.upper().strip():
             raise StaleApprovalError(
