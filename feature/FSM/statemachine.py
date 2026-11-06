@@ -339,8 +339,10 @@ async def transition_to(
         logger.debug("Room %s: already in %s, skipping", room_id, current.name)
         return current, current
 
+    from feature.command.interlock import is_edge_fsm_enabled
+
     allowed = _ROOM_TRANSITIONS.get(current, frozenset())
-    if target not in allowed:
+    if is_edge_fsm_enabled() and target not in allowed:
         msg = (
             f"Room {room_id}: transition {current.name} -> {target.name} "
             f"is not allowed"

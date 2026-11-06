@@ -101,7 +101,11 @@ def check_room_command(
     command_value: str,
     source: str,
 ) -> None:
-    """Raise :class:`InterlockViolation` nếu lệnh vi phạm bất biến tại ``current_mode``."""
+    """Raise :class:`InterlockViolation` nếu lệnh vi phạm bất biến tại ``current_mode``.
+    Khi ``SAFETY_FSM_ENABLED=false`` -> cho phép mọi tool chạy global không bị chặn.
+    """
+    if not is_edge_fsm_enabled():
+        return
     mode = (current_mode or "").upper().strip()
     ctype = (command_type or "").lower().strip()
     cvalue = (command_value or "").lower().strip()
