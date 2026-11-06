@@ -13,9 +13,35 @@ qua các kiểm tra dưới đây trước khi xuống MQTT:
 """
 from __future__ import annotations
 
+import hashlib
 import os
 
 _FALSY_FLAGS: frozenset[str] = frozenset({"0", "false", "no", "off"})
+
+
+def compute_composite_state_version(
+    room_mode: str | None,
+    room_ts: str | None,
+    door_state: str | None = None,
+    door_ts: str | None = None,
+    smoke_state: str | None = None,
+    smoke_ts: str | None = None,
+) -> str | None:
+    """Tính mã băm phiên bản trạng thái tổng hợp (Room + Door + Smoke) kiểu EffectMatch.
+
+    Bất kỳ thay đổi nào trên chế độ phòng, trạng thái cửa hay cảm biến khói (kể cả khi
+    phòng đang ở LOCK mà khói tự tan SUSPECTED -> NORMAL) đều sinh ra ``state_version`` mới.
+    Trả về ``None`` nếu chưa có bất kỳ bản ghi trạng thái nào trong DB.
+    """
+    if room_ts is None and door_ts is None and smoke_ts is None:
+        return None
+    canonical = (
+        f"mode={str(room_mode or '').upper()}@{room_ts or ''}|"
+        f"door={str(door_state or '').upper()}@{door_ts or ''}|"
+        f"smoke={str(smoke_state or '').upper()}@{smoke_ts or ''}"
+    )
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+    return f"sv1:{digest}"
 
 
 def _env_flag(name: str, default: bool = True) -> bool:

@@ -16,6 +16,7 @@ from feature.command.interlock import (
     StaleApprovalError,
     check_expected_state,
     check_room_command,
+    compute_composite_state_version,
     is_toctou_binding_enabled,
 )
 
@@ -115,6 +116,30 @@ class LayerIndependenceTests(unittest.TestCase):
             with self.assertRaises(InterlockViolation) as ctx:
                 check_room_command("EMERGENCY", "door", "locked", "ai_agent")
             self.assertEqual(ctx.exception.code, "INV_B_NO_LOCK_EXIT")
+
+
+class CompositeStateVersionTests(unittest.TestCase):
+    """Kiểm tra composite hash sửa điểm yếu W1 (smoke/door đổi nhưng room_mode giữ nguyên)."""
+
+    def test_returns_none_when_all_timestamps_empty(self):
+        self.assertIsNone(compute_composite_state_version("SAVING", None, "LOCKED", None, "NORMAL", None))
+
+    def test_smoke_self_recovery_in_locked_room_changes_version(self):
+        # Phòng đang LOCK (transition bị chặn), khói từ SUSPECTED tự tan về NORMAL:
+        v_suspected = compute_composite_state_version(
+            "LOCK", "t1", "LOCKED", "t1", "SUSPECTED", "t2"
+        )
+        v_recovered = compute_composite_state_version(
+            "LOCK", "t1", "LOCKED", "t1", "NORMAL", "t3"
+        )
+        self.assertNotEqual(v_suspected, v_recovered)
+        with _env("true"), self.assertRaises(StaleApprovalError):
+            check_expected_state("LOCK", v_recovered, "LOCK", v_suspected)
+
+    def test_manual_door_change_changes_version(self):
+        v1 = compute_composite_state_version("LECTURE", "t1", "UNLOCKED", "t1", "NORMAL", "t1")
+        v2 = compute_composite_state_version("LECTURE", "t1", "LOCKED", "t2", "NORMAL", "t1")
+        self.assertNotEqual(v1, v2)
 
 
 if __name__ == "__main__":

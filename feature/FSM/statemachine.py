@@ -213,19 +213,11 @@ async def get_current_state(
         return _DEFAULT_STATES[state_cls]
 
 
-async def get_state_snapshot(
+async def _get_latest_state_and_ts(
     room_id: UUID,
     state_cls: type[BaseState],
     db: AsyncSession,
 ) -> tuple[BaseState, str | None]:
-    """Return ``(state, state_version)`` where version is the latest record's timestamp (ISO).
-
-    ``state_version`` is ``None`` when the room has no record yet (default state).
-    Records are append-only, so any state change (including A→B→A) yields a new version.
-    """
-    if state_cls not in _STATE_CONFIG:
-        raise ValueError(f"Unknown state class: {state_cls}")
-
     cfg = _STATE_CONFIG[state_cls]
     ts_col = getattr(cfg.model, cfg.timestamp_column)
     result = await db.execute(
@@ -238,9 +230,46 @@ async def get_state_snapshot(
     if record is None:
         return _DEFAULT_STATES[state_cls], None
 
-    state = await get_current_state(room_id, state_cls, db)
+    db_enum_value = getattr(record, cfg.state_column)
+    try:
+        state = state_cls[db_enum_value.name]
+    except KeyError:
+        state = _DEFAULT_STATES[state_cls]
     ts = getattr(record, cfg.timestamp_column)
     return state, (ts.isoformat() if ts is not None else None)
+
+
+async def get_state_snapshot(
+    room_id: UUID,
+    state_cls: type[BaseState],
+    db: AsyncSession,
+) -> tuple[BaseState, str | None]:
+    """Return ``(state, state_version)`` where version is a composite hash over
+    ``(RoomState, DoorState, SmokeState)`` and their latest timestamps.
+
+    ``state_version`` is ``None`` when the room has no record yet (default state).
+    Any state change across room mode, door lock, or smoke sensor yields a new version.
+    """
+    if state_cls not in _STATE_CONFIG:
+        raise ValueError(f"Unknown state class: {state_cls}")
+
+    state, ts = await _get_latest_state_and_ts(room_id, state_cls, db)
+    if state_cls is not RoomState:
+        return state, ts
+
+    from feature.command.interlock import compute_composite_state_version
+
+    door_st, door_ts = await _get_latest_state_and_ts(room_id, DoorState, db)
+    smoke_st, smoke_ts = await _get_latest_state_and_ts(room_id, SmokeState, db)
+    version = compute_composite_state_version(
+        room_mode=state.name,
+        room_ts=ts,
+        door_state=door_st.name,
+        door_ts=door_ts,
+        smoke_state=smoke_st.name,
+        smoke_ts=smoke_ts,
+    )
+    return state, version
 
 
 async def set_current_state(
