@@ -141,6 +141,17 @@ class CompositeStateVersionTests(unittest.TestCase):
         v2 = compute_composite_state_version("LECTURE", "t1", "LOCKED", "t2", "NORMAL", "t1")
         self.assertNotEqual(v1, v2)
 
+    def test_fail_closed_when_admin_hitl_missing_binding_and_edge_toctou_enabled(self):
+        # Backend tắt TOCTOU (gửi None, None) nhưng Edge bật TOCTOU -> Fail-Closed (HTTP 409)
+        with _env("true"), self.assertRaises(StaleApprovalError) as ctx:
+            check_expected_state("SAVING", "v1", None, None, source="admin_hitl")
+        self.assertEqual(ctx.exception.expected, "<required_state_binding>")
+
+    def test_fail_closed_bypassed_when_edge_toctou_disabled(self):
+        with _env("false"):
+            check_expected_state("SAVING", "v1", None, None, source="admin_hitl")
+
+
 
 if __name__ == "__main__":
     unittest.main()

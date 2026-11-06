@@ -86,6 +86,7 @@ async def execute_room_command(
         # Approval phải còn hiệu lực: phòng vẫn ở đúng trạng thái người duyệt đã thấy.
         check_expected_state(
             current_state.name, state_version, expected_mode, expected_state_version,
+            source=source,
         )
         # Bất biến A/B + ma trận quyền theo mode cho nguồn AI.
         check_room_command(current_state.name, command_type, command_value, source)
