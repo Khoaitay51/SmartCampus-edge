@@ -1,9 +1,11 @@
 """REST endpoints for command execution (HITL tool execution)."""
+import hmac
 import logging
+import os
 import uuid
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
 from feature.mqtt.mqtt_worker import create_mqtt_client
@@ -12,6 +14,22 @@ from .interlock import InterlockViolation, StaleApprovalError
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/commands", tags=["commands"])
+
+VALID_COMMAND_SOURCES: frozenset[str] = frozenset(
+    {"api", "ai_agent", "admin_hitl", "dtwin", "dtwin_admin", "admin"}
+)
+
+
+def _authorize_internal_command(x_edge_internal_token: str | None) -> None:
+    """Enforce internal token on command execution endpoints when EDGE_INTERNAL_TOKEN is configured."""
+    expected = os.getenv("EDGE_INTERNAL_TOKEN", "").strip()
+    if not expected:
+        return
+    if not x_edge_internal_token or not hmac.compare_digest(x_edge_internal_token, expected):
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "UNAUTHORIZED_EDGE_CALLER", "message": "Missing or invalid Edge internal token."},
+        )
 
 
 class RoomCommandRequest(BaseModel):
@@ -53,7 +71,10 @@ async def room_state_snapshot(room_id: str):
 
 
 @router.post("/room/execute", status_code=202)
-async def execute_room_cmd(req: RoomCommandRequest):
+async def execute_room_cmd(
+    req: RoomCommandRequest,
+    x_edge_internal_token: str | None = Header(default=None, alias="X-Edge-Internal-Token"),
+):
     """
     Execute a room command (fan, door, light, buzzer).
 
@@ -62,6 +83,13 @@ async def execute_room_cmd(req: RoomCommandRequest):
 
     Returns 202 Accepted with command tracking info.
     """
+    _authorize_internal_command(x_edge_internal_token)
+    normalized_source = (req.source or "").lower().strip()
+    if normalized_source not in VALID_COMMAND_SOURCES:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "INVALID_COMMAND_SOURCE", "message": f"Unsupported command source '{req.source}'."},
+        )
     try:
         target_uuid = _to_room_uuid(req.room_id)
 
@@ -72,7 +100,7 @@ async def execute_room_cmd(req: RoomCommandRequest):
                 command_value=req.command_value,
                 mqtt_client=client,
                 reason=req.reason,
-                source=req.source,
+                source=normalized_source,
                 expected_mode=req.expected_mode,
                 expected_state_version=req.expected_state_version,
             )
@@ -86,14 +114,20 @@ async def execute_room_cmd(req: RoomCommandRequest):
         raise HTTPException(status_code=403, detail={"code": e.code, "message": str(e)})
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Failed to execute room command")
         raise HTTPException(status_code=500, detail="Command execution failed")
 
 
 @router.post("/device/execute", status_code=202)
-async def execute_device_cmd(req: DeviceCommandRequest):
+async def execute_device_cmd(
+    req: DeviceCommandRequest,
+    x_edge_internal_token: str | None = Header(default=None, alias="X-Edge-Internal-Token"),
+):
     """Execute a device command (OTA, restart)."""
+    _authorize_internal_command(x_edge_internal_token)
     try:
         async with create_mqtt_client(identifier=f"edge-cmd-{uuid.uuid4().hex[:8]}") as client:
             result = await execute_device_command(

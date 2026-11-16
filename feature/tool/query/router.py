@@ -16,9 +16,14 @@ router = APIRouter(prefix="/api/tool/reasoning", tags=["reasoning_tool"])
 
 
 @router.get("/environment")
-async def get_environment_api(room_id: str, since: datetime, limit: int = 200):
-    """Return raw environment telemetry for a room since a given timestamp."""
-    rows = await get_environment(room_id, since, limit=limit)
+async def get_environment_api(
+    room_id: str,
+    since: datetime,
+    limit: int = 200,
+    until: Optional[datetime] = None,
+):
+    """Return raw environment telemetry for a room between *since* and *until* (or reference now)."""
+    rows = await get_environment(room_id, since, limit=limit, until=until)
     return {"rows": rows}
 
 

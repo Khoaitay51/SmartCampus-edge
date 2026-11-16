@@ -158,14 +158,14 @@ def check_expected_state(
     Chỉ kiểm tra những trường mà caller cung cấp. ``expected_version`` được so sánh
     chính xác để bắt cả trường hợp đổi mode rồi quay lại cùng giá trị (A→B→A).
     Nếu ``source == 'admin_hitl'`` và ``SAFETY_TOCTOU_BINDING_ENABLED=true``, bắt buộc
-    phải có ít nhất ``expected_mode`` hoặc ``expected_version`` (Fail-Closed).
+    phải có ĐẦY ĐỦ cả ``expected_mode`` và ``expected_version`` (Fail-Closed).
     Nếu ``SAFETY_TOCTOU_BINDING_ENABLED=false`` -> bỏ qua kiểm tra độ tươi trạng thái.
     """
     if not is_toctou_binding_enabled():
         return
-    if (source or "").lower().strip() == "admin_hitl" and not expected_mode and not expected_version:
+    if (source or "").lower().strip() == "admin_hitl" and (not expected_mode or not expected_version):
         raise StaleApprovalError(
-            "TOCTOU Fail-Closed: 'admin_hitl' approval is missing expected_mode / expected_state_version binding.",
+            "TOCTOU Fail-Closed: 'admin_hitl' approval requires both expected_mode and expected_state_version binding.",
             expected="<required_state_binding>",
             actual=current_version or (current_mode or "UNKNOWN").upper(),
         )

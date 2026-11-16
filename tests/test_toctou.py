@@ -147,6 +147,12 @@ class CompositeStateVersionTests(unittest.TestCase):
             check_expected_state("SAVING", "v1", None, None, source="admin_hitl")
         self.assertEqual(ctx.exception.expected, "<required_state_binding>")
 
+    def test_fail_closed_when_admin_hitl_has_partial_binding(self):
+        # Thiếu expected_version hoặc thiếu expected_mode đều bị chặn fail-closed với admin_hitl
+        for mode, ver in (("LECTURE", None), (None, "v1")):
+            with self.subTest(mode=mode, ver=ver), _env("true"), self.assertRaises(StaleApprovalError):
+                check_expected_state("LECTURE", "v1", mode, ver, source="admin_hitl")
+
     def test_fail_closed_bypassed_when_edge_toctou_disabled(self):
         with _env("false"):
             check_expected_state("SAVING", "v1", None, None, source="admin_hitl")

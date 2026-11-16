@@ -437,7 +437,7 @@ async def _handle_occupancy_telemetry(client: mqtt.Client, payload: dict) -> Non
                         "occupancy_type": "COUNT",
                     }
                 )
-                client.publish(
+                await client.publish(
                     f"smartcampus/v1/telemetry/room/{room_uuid}/occupancy",
                     json.dumps(occ_payload),
                     qos=1,

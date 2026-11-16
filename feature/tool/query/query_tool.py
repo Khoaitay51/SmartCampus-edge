@@ -1,4 +1,5 @@
 import logging
+import os
 from datetime import datetime, timezone, timedelta, date as date_type
 from typing import Any
 
@@ -10,18 +11,37 @@ from database import async_session
 logger = logging.getLogger(__name__)
 
 
-async def get_environment(room_id: str, since: datetime, limit: int = 200) -> list:
-    """Fetch raw environment telemetry rows for *room_id* recorded on or after *since*."""
+def _reference_now(until: datetime | None = None) -> datetime:
+    """Return explicit upper time bound, BENCHMARK_REFERENCE_TIME if configured, or UTC now."""
+    if until is not None:
+        return until.replace(tzinfo=timezone.utc) if until.tzinfo is None else until
+    ref_raw = os.getenv("BENCHMARK_REFERENCE_TIME", "").strip()
+    if ref_raw:
+        try:
+            parsed = datetime.fromisoformat(ref_raw)
+            return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
+        except ValueError:
+            logger.warning("Invalid BENCHMARK_REFERENCE_TIME '%s'; using wall clock.", ref_raw)
+    return datetime.now(timezone.utc)
+
+
+async def get_environment(
+    room_id: str,
+    since: datetime,
+    limit: int = 200,
+    until: datetime | None = None,
+) -> list:
+    """Fetch raw environment telemetry rows for *room_id* recorded between *since* and *until*."""
     if since.tzinfo is None:
         since = since.replace(tzinfo=timezone.utc)
-    now_ts = datetime.now(timezone.utc)
+    now_ts = _reference_now(until)
 
     stmt = (
         select(models.Environment)
         .where(
             models.Environment.room_id == room_id,
             models.Environment.environment_timestamp >= since,
-            models.Environment.environment_timestamp < now_ts,
+            models.Environment.environment_timestamp <= now_ts,
         )
         .order_by(models.Environment.environment_timestamp)
         .limit(limit)
@@ -63,11 +83,12 @@ async def get_schedule(room_id: str | None = None, date: str | None = None) -> d
         if room_id:
             conditions.append(models.RoomSession.room_id == room_id)
 
-        # Filter theo date (mặc định hôm nay)
+        # Filter theo date (mặc định hôm nay theo reference clock)
+        ref_now = _reference_now()
         try:
-            target_date = date_type.fromisoformat(date) if date else date_type.today()
+            target_date = date_type.fromisoformat(date) if date else ref_now.date()
         except ValueError:
-            target_date = date_type.today()
+            target_date = ref_now.date()
 
         from datetime import timedelta
         day_start = datetime.combine(target_date, datetime.min.time()).replace(tzinfo=timezone.utc)
@@ -84,7 +105,7 @@ async def get_schedule(room_id: str | None = None, date: str | None = None) -> d
         result = await db.execute(stmt)
         sessions = result.scalars().all()
 
-        now = datetime.now(timezone.utc)
+        now = ref_now
         active_session = None
         classes_today = []
 
@@ -119,7 +140,8 @@ async def get_room_history(room_id: str, hours: int = 24) -> dict[str, Any]:
     """Lịch sử RoomState transitions của phòng trong N giờ gần nhất."""
     from datetime import timedelta
 
-    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+    now_ts = _reference_now()
+    since = now_ts - timedelta(hours=hours)
 
     async with async_session() as db:
         stmt = (
@@ -128,6 +150,7 @@ async def get_room_history(room_id: str, hours: int = 24) -> dict[str, Any]:
                 and_(
                     models.RoomState.room_id == room_id,
                     models.RoomState.room_state_timestamp >= since,
+                    models.RoomState.room_state_timestamp <= now_ts,
                 )
             )
             .order_by(models.RoomState.room_state_timestamp)
@@ -209,11 +232,12 @@ async def compare_rooms(room_ids: list[str], metric: str, window: str = "1h") ->
     from datetime import timedelta
 
     hours = 1 if window == "1h" else (6 if window == "6h" else 0.25)
-    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+    now_ts = _reference_now()
+    since = now_ts - timedelta(hours=hours)
 
     comparisons = []
     for room_id in room_ids:
-        rows = await get_environment(room_id, since)
+        rows = await get_environment(room_id, since, until=now_ts)
         if rows:
             vals = [
                 r.get("smoke_value") if metric == "smoke" else r.get(metric)

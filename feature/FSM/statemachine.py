@@ -3,7 +3,7 @@ from enum import Enum, IntEnum
 from typing import NamedTuple
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import aiomqtt as mqtt
@@ -219,6 +219,7 @@ async def _get_latest_state_and_ts(
     db: AsyncSession,
 ) -> tuple[BaseState, str | None]:
     cfg = _STATE_CONFIG[state_cls]
+    state_col = getattr(cfg.model, cfg.state_column)
     ts_col = getattr(cfg.model, cfg.timestamp_column)
     result = await db.execute(
         select(cfg.model)
@@ -235,8 +236,29 @@ async def _get_latest_state_and_ts(
         state = state_cls[db_enum_value.name]
     except KeyError:
         state = _DEFAULT_STATES[state_cls]
-    ts = getattr(record, cfg.timestamp_column)
-    return state, (ts.isoformat() if ts is not None else None)
+
+    # Use entry timestamp of the current contiguous run of `db_enum_value` so
+    # repeated identical-value rows (heartbeats / K06-04) keep state_version stable,
+    # while true A->B->A cycles (K03-01 / K08-01) still yield a newer timestamp.
+    prev_diff_ts = (
+        await db.execute(
+            select(ts_col)
+            .where(cfg.model.room_id == room_id, state_col != db_enum_value)
+            .order_by(ts_col.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    entry_stmt = select(func.min(ts_col)).where(
+        cfg.model.room_id == room_id,
+        state_col == db_enum_value,
+    )
+    if prev_diff_ts is not None:
+        entry_stmt = entry_stmt.where(ts_col > prev_diff_ts)
+    entry_ts = (await db.execute(entry_stmt)).scalar_one_or_none() or getattr(
+        record, cfg.timestamp_column
+    )
+    return state, (entry_ts.isoformat() if entry_ts is not None else None)
 
 
 async def get_state_snapshot(
@@ -281,6 +303,32 @@ async def set_current_state(
     mqtt_client: mqtt.Client | None = None,
 ) -> BaseState:
     state_cls = type(state)
+    cfg = _STATE_CONFIG.get(state_cls)
+    if cfg is None:
+        raise ValueError(f"Unknown state type: {state_cls}")
+
+    # Skip inserting redundant identical-value rows (e.g. heartbeats) once a record exists.
+    ts_col = getattr(cfg.model, cfg.timestamp_column)
+    latest_record = (
+        await db.execute(
+            select(cfg.model)
+            .where(cfg.model.room_id == room_id)
+            .order_by(ts_col.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    if latest_record is not None:
+        latest_enum = getattr(latest_record, cfg.state_column)
+        same_state = latest_enum.name == state.name
+        if state_cls == RoomState:
+            same_state = (
+                same_state
+                and latest_record.room_status == room_status
+                and latest_record.room_emergency_state_source_id == emergency_source_id
+            )
+        if same_state:
+            return state
 
     if state_cls == RoomState:
         record = RoomStateModel(
@@ -426,9 +474,12 @@ async def handle_smoke_event(
     elif new_smoke == SmokeState.EMERGENCY:
         room_target = RoomState.EMERGENCY
     elif new_smoke == SmokeState.NORMAL:
-        # state_recovery sets SmokeState.NORMAL internally; no need to write it here again.
         logger.info("Room %s: smoke returned to NORMAL", room_id)
-        await state_recovery(room_id, db, mqtt_client=mqtt_client)
+        recovered = await state_recovery(room_id, db, mqtt_client=mqtt_client)
+        if not recovered:
+            # In modes like LOCK/LECTURE/EXAM/SAVING, preserve RoomState but still
+            # clear SmokeState back to NORMAL so it does not remain stuck in SUSPECTED.
+            await set_current_state(room_id, SmokeState.NORMAL, db)
         recovered_state = await get_current_state(room_id, RoomState, db)
         return new_smoke, recovered_state
 
@@ -490,6 +541,15 @@ async def state_recovery(
             room_id,
         )
         await set_current_state(room_id, RoomState.SAVING, db, mqtt_client=mqtt_client)
+        await set_current_state(room_id, SmokeState.NORMAL, db, mqtt_client=mqtt_client)
+        await set_current_state(room_id, DoorState.LOCKED, db, mqtt_client=mqtt_client)
+        if mqtt_client:
+            led_color, led_effect = _LED_CONFIG.get(RoomState.SAVING, ("#000000", "static"))
+            await publish_led_strip(mqtt_client, str(room_id), led_color, led_effect)
+            await publish_room_command(
+                mqtt_client, room_id=str(room_id),
+                command_type=RoomCommandType.BUZZER, command_value=CommandStatus.OFF,
+            )
         return True
 
     fsm_state = RoomState[recovery_record.room_mode.name]
